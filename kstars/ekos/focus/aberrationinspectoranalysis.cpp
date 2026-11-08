@@ -10,6 +10,7 @@
 #include <KLocalizedString>
 
 #include <QJsonArray>
+#include <QMetaType>
 
 #include <algorithm>
 #include <cmath>
@@ -502,6 +503,26 @@ QString AberrationInspectorAnalysis::tileSelectionToKey(TileSelection tileSelect
         default:
             return QStringLiteral("outerCorners");
     }
+}
+
+bool AberrationInspectorAnalysis::tileSelectionFromVariant(const QVariant &value, TileSelection *selection)
+{
+    if (value.userType() == QMetaType::Bool)
+        return false;
+    bool ok = false;
+    const int index = value.toInt(&ok);
+    if (ok)
+    {
+        if (index < TILES_ALL || index > TILES_INNER_DIAMOND)
+            return false;
+        if (selection)
+            *selection = static_cast<TileSelection>(index);
+        return true;
+    }
+    const TileSelection fromKey = tileSelectionFromKey(value.toString(), &ok);
+    if (ok && selection)
+        *selection = fromKey;
+    return ok;
 }
 
 QString AberrationInspectorAnalysis::adviceKey(BackfocusAdvice advice)

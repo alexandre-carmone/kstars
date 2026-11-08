@@ -14,6 +14,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVector>
+#include <QVariant>
 #include <QVector2D>
 
 #include <cstdint>
@@ -211,6 +212,11 @@ class AberrationInspectorAnalysis
         static TileSelection tileSelectionFromKey(const QString &key, bool *ok = nullptr);
         /** @brief Machine-readable key of a tile selection: all | outerCorners | innerDiamond. */
         static QString tileSelectionToKey(TileSelection tileSelection);
+        /**
+         * @brief Tile selection from a settings value: the machine-readable key or the combo box index (0 to 2).
+         * @return false when the value is neither
+         */
+        static bool tileSelectionFromVariant(const QVariant &value, TileSelection *selection);
         /** @brief Machine-readable backfocus advice: none | nearer | away. */
         static QString adviceKey(BackfocusAdvice advice);
         /** @brief Machine-readable curve fit name: quadratic | hyperbola | parabola | gaussian2D | gaussian3D | plane. */

@@ -73,6 +73,7 @@ class TestAberrationInspector : public QObject
         void setSolutionSeam();
         void invalidSelection();
         void optionAndKeyStrings();
+        void tileSelectionFromVariant();
         void toJsonShape();
 };
 
@@ -629,6 +630,29 @@ void TestAberrationInspector::optionAndKeyStrings()
     QCOMPARE(AberrationInspectorAnalysis::curveFitKey(CurveFitting::FOCUS_2DGAUSSIAN), QStringLiteral("gaussian2D"));
     QCOMPARE(AberrationInspectorAnalysis::curveFitKey(CurveFitting::FOCUS_3DGAUSSIAN), QStringLiteral("gaussian3D"));
     QCOMPARE(AberrationInspectorAnalysis::curveFitKey(CurveFitting::FOCUS_PLANE), QStringLiteral("plane"));
+}
+
+void TestAberrationInspector::tileSelectionFromVariant()
+{
+    Selection selection = Selection::TILES_ALL;
+    // Combo box index, as a number, a JSON double or a numeric string
+    QVERIFY(AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(2), &selection));
+    QCOMPARE(selection, Selection::TILES_INNER_DIAMOND);
+    QVERIFY(AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(1.0), &selection));
+    QCOMPARE(selection, Selection::TILES_OUTER_CORNERS);
+    QVERIFY(AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(QStringLiteral("0")), &selection));
+    QCOMPARE(selection, Selection::TILES_ALL);
+    // Machine-readable key
+    QVERIFY(AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(QStringLiteral("innerDiamond")), &selection));
+    QCOMPARE(selection, Selection::TILES_INNER_DIAMOND);
+    // Invalid values leave the selection untouched
+    QVERIFY(!AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(3), &selection));
+    QVERIFY(!AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(-1), &selection));
+    QVERIFY(!AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(QStringLiteral("bogus")), &selection));
+    QVERIFY(!AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(true), &selection));
+    QVERIFY(!AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(), &selection));
+    QCOMPARE(selection, Selection::TILES_INNER_DIAMOND);
+    QVERIFY(AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(QStringLiteral("all")), nullptr));
 }
 
 namespace

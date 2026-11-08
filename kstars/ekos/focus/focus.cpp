@@ -40,6 +40,7 @@
 
 // Devices
 #include "indi/indifilterwheel.h"
+#include "indi/indilistener.h"
 #include "ksnotification.h"
 #include "kconfigdialog.h"
 
@@ -53,10 +54,13 @@
 
 #include <cmath>
 #include <QJsonArray>
+#include <QDateTime>
 
+#include "aberrationinspectoranalysis.h"
+#include "aberrationinspectorutils.h"
+#include "tiltcorrectioncalc.h"
 #ifdef HAVE_QTGRAPHS
 #include "aberrationinspector.h"
-#include "aberrationinspectorutils.h"
 #endif
 
 #define MAXIMUM_ABS_ITERATIONS     51
@@ -1200,6 +1204,8 @@ bool Focus::startAbInsRun(QString *reason)
     Q_EMIT newAbInsStatus(abInsStatus());
     runAutoFocus(AutofocusReason::FOCUS_ABERRATION_INSPECTOR, "");
     // A rejection inside runAutoFocus() reaches stop() synchronously, which clears the flag
+    if (!m_abInsOn && reason)
+        *reason = i18n("Aberration Inspector could not start the autofocus run, see the Focus log.");
     return m_abInsOn;
 }
 
@@ -1213,6 +1219,7 @@ QJsonObject Focus::abInsStatus() const
     status.insert(QStringLiteral("running"), m_abInsOn);
     status.insert(QStringLiteral("lastRun"), m_abInsRun);
     status.insert(QStringLiteral("lastRunState"), m_abInsLastState);
+    status.insert(QStringLiteral("hasResult"), !m_abInsLastResult.isEmpty());
 #ifdef HAVE_QTGRAPHS
     status.insert(QStringLiteral("dialogAvailable"), true);
 #else
@@ -3930,10 +3937,6 @@ void Focus::plotLinearFinalUpdates()
 
 void Focus::startAberrationInspector()
 {
-#ifdef HAVE_QTGRAPHS
-    // Fill in the data structure to be passed to the Aberration Inspector
-    AberrationInspector::abInsData data;
-
     ImageMosaicMask *mosaicmask = dynamic_cast<ImageMosaicMask *>(m_FocusView->imageMask().get());
     if (!mosaicmask)
     {
@@ -3941,7 +3944,8 @@ void Focus::startAberrationInspector()
         return;
     }
 
-
+    // Fill in the data structure to be passed to the Aberration Inspector
+    AbInsData data;
     data.run = ++m_abInsRun;
     data.curveFit = m_CurveFit;
     data.useWeights = m_OpsFocusProcess->focusUseWeights->isChecked();
@@ -3956,12 +3960,16 @@ void Focus::startAberrationInspector()
     data.cfzSteps = m_cfzSteps;
     data.isPositionBased = isPositionBased();
     // Current optical train id so the Tilt Correction Advisory persists its settings per train.
-    data.opticalTrainID = OpticalTrainManager::Instance()->id(opticalTrainCombo->currentText());
+    data.opticalTrainID = currentOpticalTrainID();
 
+    // Analyse the run headlessly for EkosLive clients. The dialog below computes the same numbers for its display.
+    m_abInsLastResult = buildAbInsResult(data);
     m_abInsResultPending = false;
     m_abInsLastState = QStringLiteral("complete");
+    Q_EMIT newAbInsResult(m_abInsLastResult);
     Q_EMIT newAbInsStatus(abInsStatus());
 
+#ifdef HAVE_QTGRAPHS
     // Launch the Aberration Inspector.
     appendLogText(i18n("Launching Aberration Inspector run %1...", m_abInsRun));
     QPointer<AberrationInspector> abIns(new AberrationInspector(data, m_abInsPosition, m_abInsMeasure, m_abInsWeight,
@@ -3969,13 +3977,141 @@ void Focus::startAberrationInspector()
     abIns->setAttribute(Qt::WA_DeleteOnClose);
     abIns->show();
 #else
-    // Without Qt Graphs there is no dialog; the run still counts for abInsStatus()
-    ++m_abInsRun;
-    appendLogText(i18n("Aberration Inspector run %1 complete (KStars was built without Qt Graphs, no dialog).", m_abInsRun));
-    m_abInsResultPending = false;
-    m_abInsLastState = QStringLiteral("complete");
-    Q_EMIT newAbInsStatus(abInsStatus());
+    appendLogText(i18n("Aberration Inspector run %1 analysed. The results are available to EkosLive clients only "
+                       "(KStars was built without Qt Graphs).", m_abInsRun));
 #endif
+}
+
+// Headless Aberration Inspector analysis of the data collected during the run, for EkosLive clients
+QJsonObject Focus::buildAbInsResult(const AbInsData &data)
+{
+    AberrationInspectorAnalysis analysis(data, m_abInsPosition, m_abInsMeasure, m_abInsWeight, m_abInsNumStars,
+                                         m_abInsTileCenterOffset);
+    analysis.fit();
+
+    AberrationInspectorAnalysis::Settings settings;
+    settings.tileSelection = AberrationInspectorAnalysis::tileSelectionFromOption(Options::abInsTileSelection());
+    settings.optCentres = Options::abInsOptCentres();
+    const AberrationInspectorAnalysis::Result result = analysis.analyse(settings);
+
+    QJsonObject json = analysis.toJson(result);
+    json.insert(QStringLiteral("available"), true);
+    json.insert(QStringLiteral("train"), opticalTrain());
+    json.insert(QStringLiteral("timestamp"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+
+    // Tilt plate advice, with the same plate settings and ETA detection as the Tilt Correction Advisory
+    QSharedPointer<ISD::GenericDevice> eta;
+    const bool etaConnected = INDIListener::findDevice(TiltCorrectionCalc::etaDeviceName(), eta);
+    const TiltCorrectionCalc::PlateSettings plate = TiltCorrectionCalc::applyEtaOverride(
+            TiltCorrectionCalc::load(data.opticalTrainID), etaConnected);
+    if (result.tiltOK)
+    {
+        const TiltCorrectionCalc::Inputs inputs { result.lrMicrons, result.tbMicrons, result.lrSpanMicrons, result.tbSpanMicrons };
+        json.insert(QStringLiteral("tiltPlate"), TiltCorrectionCalc::toJson(TiltCorrectionCalc::compute(inputs, plate), plate,
+                    Options::tiltPlatePresent(), etaConnected));
+    }
+    else
+    {
+        QJsonObject tiltPlate;
+        tiltPlate.insert(QStringLiteral("valid"), false);
+        tiltPlate.insert(QStringLiteral("present"), Options::tiltPlatePresent());
+        tiltPlate.insert(QStringLiteral("etaConnected"), etaConnected);
+        json.insert(QStringLiteral("tiltPlate"), tiltPlate);
+    }
+
+    qCInfo(KSTARS_EKOS_FOCUS) << "Aberration Inspector run" << data.run << "resultsOK" << result.resultsOK
+                              << "backfocus(um)" << result.backfocusMicrons << "LR(um)" << result.lrMicrons
+                              << "TB(um)" << result.tbMicrons << "warnings" << result.warnings;
+    return json;
+}
+
+uint32_t Focus::currentOpticalTrainID() const
+{
+    const int id = OpticalTrainManager::Instance()->id(opticalTrainCombo->currentText());
+    return id < 0 ? 0 : static_cast<uint32_t>(id);
+}
+
+// Aberration Inspector and tilt plate settings for EkosLive clients
+QVariantMap Focus::abInsSettings() const
+{
+    QSharedPointer<ISD::GenericDevice> eta;
+    const bool etaConnected = INDIListener::findDevice(TiltCorrectionCalc::etaDeviceName(), eta);
+    const TiltCorrectionCalc::PlateSettings plate = TiltCorrectionCalc::applyEtaOverride(
+            TiltCorrectionCalc::load(currentOpticalTrainID()), etaConnected);
+
+    QVariantMap settings;
+    settings.insert(QStringLiteral("train"), opticalTrain());
+    settings.insert(QStringLiteral("etaConnected"), etaConnected);
+    settings.insert(QStringLiteral("abInsTileSelection"), AberrationInspectorAnalysis::tileSelectionToKey(
+                        AberrationInspectorAnalysis::tileSelectionFromOption(Options::abInsTileSelection())));
+    settings.insert(QStringLiteral("abInsOptCentres"), Options::abInsOptCentres());
+    settings.insert(QStringLiteral("abInsShowLabels"), Options::abInsShowLabels());
+    settings.insert(QStringLiteral("abInsShowCFZ"), Options::abInsShowCFZ());
+    settings.insert(QStringLiteral("tiltPlatePresent"), Options::tiltPlatePresent());
+    settings.insert(QStringLiteral("tiltPlateType"), plate.plateType);
+    settings.insert(QStringLiteral("tiltMode"), plate.mode);
+    settings.insert(QStringLiteral("tiltRadius"), plate.radiusMm);
+    settings.insert(QStringLiteral("tiltScrewPitch"), plate.screwPitchMm);
+    settings.insert(QStringLiteral("tiltThreadIndex"), plate.threadIndex);
+    settings.insert(QStringLiteral("tiltRotation"), plate.plateAngleDeg);
+    return settings;
+}
+
+// Apply a (partial) settings object received from an EkosLive client
+void Focus::setAbInsSettings(const QVariantMap &settings)
+{
+    const uint32_t trainID = currentOpticalTrainID();
+    QSharedPointer<ISD::GenericDevice> eta;
+    const bool etaConnected = INDIListener::findDevice(TiltCorrectionCalc::etaDeviceName(), eta);
+    TiltCorrectionCalc::PlateSettings plate = TiltCorrectionCalc::load(trainID);
+    bool plateChanged = false;
+
+    for (auto it = settings.constBegin(); it != settings.constEnd(); ++it)
+    {
+        const QString &key = it.key();
+        const QVariant &value = it.value();
+        bool valid = true;
+
+        if (key == QLatin1String("train") || key == QLatin1String("etaConnected"))
+            continue;   // read-only
+        else if (key == QLatin1String("abInsTileSelection"))
+        {
+            // Accept the machine-readable key or the combo box index
+            AberrationInspectorAnalysis::TileSelection selection = AberrationInspectorAnalysis::TILES_OUTER_CORNERS;
+            valid = AberrationInspectorAnalysis::tileSelectionFromVariant(value, &selection);
+            if (valid)
+                Options::setAbInsTileSelection(AberrationInspectorAnalysis::tileSelectionToOption(selection));
+        }
+        else if (key == QLatin1String("abInsOptCentres"))
+            Options::setAbInsOptCentres(value.toBool());
+        else if (key == QLatin1String("abInsShowLabels"))
+            Options::setAbInsShowLabels(value.toBool());
+        else if (key == QLatin1String("abInsShowCFZ"))
+            Options::setAbInsShowCFZ(value.toBool());
+        else if (key == QLatin1String("tiltPlatePresent"))
+            Options::setTiltPlatePresent(value.toBool());
+        else
+        {
+            switch (TiltCorrectionCalc::applySetting(plate, key, value, etaConnected))
+            {
+                case TiltCorrectionCalc::SETTING_APPLIED:
+                    plateChanged = true;
+                    break;
+                case TiltCorrectionCalc::SETTING_INVALID:
+                case TiltCorrectionCalc::SETTING_UNKNOWN_KEY:
+                default:
+                    valid = false;
+                    break;
+            }
+        }
+
+        if (!valid)
+            qCDebug(KSTARS_EKOS_FOCUS) << "Ignoring Aberration Inspector setting" << key << "=" << value;
+    }
+
+    if (plateChanged)
+        TiltCorrectionCalc::save(trainID, plate);
+    Options::self()->save();
 }
 
 // Initialise the Scan Start Position algorithm

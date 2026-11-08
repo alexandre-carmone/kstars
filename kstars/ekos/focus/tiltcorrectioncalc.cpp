@@ -12,6 +12,8 @@
 #include <KLocalizedString>
 
 #include <QJsonArray>
+#include <QMetaType>
+#include <QVariant>
 
 #include <algorithm>
 #include <cmath>
@@ -214,6 +216,64 @@ void save(uint32_t opticalTrainID, const PlateSettings &settings)
         OpticalTrainSettings::Instance()->setOpticalTrainID(opticalTrainID);
         OpticalTrainSettings::Instance()->setOneSetting(OpticalTrainSettings::FocusTilt, toTrainMap(settings));
     }
+}
+
+SettingResult applySetting(PlateSettings &settings, const QString &key, const QVariant &value, bool etaConnected)
+{
+    // A bool is neither a number nor a key
+    const bool isBool = value.userType() == QMetaType::Bool;
+    const bool locked = etaConnected && settings.plateType == PLATE_3POINT;
+    bool ok = false;
+
+    if (key == QLatin1String("tiltPlateType"))
+    {
+        const int plateType = value.toInt(&ok);
+        if (isBool || !ok || (plateType != PLATE_3POINT && plateType != PLATE_4POINT))
+            return SETTING_INVALID;
+        settings.plateType = plateType;
+        return SETTING_APPLIED;
+    }
+    if (key == QLatin1String("tiltMode"))
+    {
+        const int mode = value.toInt(&ok);
+        if (isBool || !ok || (mode != MODE_RELATIVE && mode != MODE_PUSH_ONLY))
+            return SETTING_INVALID;
+        settings.mode = mode;
+        return SETTING_APPLIED;
+    }
+    if (key == QLatin1String("tiltRadius"))
+    {
+        const double radius = value.toDouble(&ok);
+        if (isBool || !ok || locked || radius < MIN_RADIUS_MM || radius > MAX_RADIUS_MM)
+            return SETTING_INVALID;
+        settings.radiusMm = radius;
+        return SETTING_APPLIED;
+    }
+    if (key == QLatin1String("tiltScrewPitch"))
+    {
+        const double pitch = value.toDouble(&ok);
+        if (isBool || !ok || locked || pitch < MIN_PITCH_MM || pitch > MAX_PITCH_MM)
+            return SETTING_INVALID;
+        settings.screwPitchMm = pitch;
+        return SETTING_APPLIED;
+    }
+    if (key == QLatin1String("tiltThreadIndex"))
+    {
+        const int threadIndex = value.toInt(&ok);
+        if (isBool || !ok || locked || threadIndex < 0 || threadIndex >= THREAD_PRESET_COUNT)
+            return SETTING_INVALID;
+        settings.threadIndex = threadIndex;
+        return SETTING_APPLIED;
+    }
+    if (key == QLatin1String("tiltRotation"))
+    {
+        const double angle = value.toDouble(&ok);
+        if (isBool || !ok || std::abs(angle) > MAX_PLATE_ANGLE_DEG)
+            return SETTING_INVALID;
+        settings.plateAngleDeg = angle;
+        return SETTING_APPLIED;
+    }
+    return SETTING_UNKNOWN_KEY;
 }
 
 QJsonObject toJson(const Result &result, const PlateSettings &settings, bool platePresent, bool etaConnected)

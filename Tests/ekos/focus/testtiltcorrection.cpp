@@ -47,6 +47,8 @@ class TestTiltCorrection : public QObject
         void positionIndexTable();
         void etaOverride();
         void trainMapRoundTrip();
+        void applySettingValidation();
+        void applySettingLockedByEta();
         void tiltToJson();
 };
 
@@ -340,6 +342,75 @@ void TestTiltCorrection::trainMapRoundTrip()
     COMPARE_DOUBLE(merged.radiusMm, 70.5, 1e-12);
     QCOMPARE(merged.plateType, fallback.plateType);
     COMPARE_DOUBLE(merged.screwPitchMm, fallback.screwPitchMm, 1e-12);
+}
+
+void TestTiltCorrection::applySettingValidation()
+{
+    PlateSettings s = threePoint();
+    const QString plateType = QStringLiteral("tiltPlateType"), mode = QStringLiteral("tiltMode"),
+                                                               radius = QStringLiteral("tiltRadius"), pitch = QStringLiteral("tiltScrewPitch"),
+                                                                                                      thread = QStringLiteral("tiltThreadIndex"), angle = QStringLiteral("tiltRotation");
+
+    QCOMPARE(applySetting(s, plateType, 1, false), SETTING_APPLIED);
+    QCOMPARE(s.plateType, PLATE_4POINT);
+    QCOMPARE(applySetting(s, plateType, QStringLiteral("0"), false), SETTING_APPLIED);   // numbers as strings are fine
+    QCOMPARE(s.plateType, PLATE_3POINT);
+    QCOMPARE(applySetting(s, plateType, 2, false), SETTING_INVALID);
+    QCOMPARE(applySetting(s, plateType, true, false), SETTING_INVALID);
+    QCOMPARE(applySetting(s, plateType, QStringLiteral("x"), false), SETTING_INVALID);
+    QCOMPARE(s.plateType, PLATE_3POINT);
+
+    QCOMPARE(applySetting(s, mode, 1.0, false), SETTING_APPLIED);   // JSON numbers arrive as doubles
+    QCOMPARE(s.mode, MODE_PUSH_ONLY);
+    QCOMPARE(applySetting(s, mode, -1, false), SETTING_INVALID);
+
+    QCOMPARE(applySetting(s, radius, MIN_RADIUS_MM, false), SETTING_APPLIED);
+    QCOMPARE(applySetting(s, radius, MAX_RADIUS_MM, false), SETTING_APPLIED);
+    COMPARE_DOUBLE(s.radiusMm, MAX_RADIUS_MM, 1e-12);
+    QCOMPARE(applySetting(s, radius, 4.9, false), SETTING_INVALID);
+    QCOMPARE(applySetting(s, radius, 100.1, false), SETTING_INVALID);
+    QCOMPARE(applySetting(s, radius, 0, false), SETTING_INVALID);
+    COMPARE_DOUBLE(s.radiusMm, MAX_RADIUS_MM, 1e-12);
+
+    QCOMPARE(applySetting(s, pitch, MIN_PITCH_MM, false), SETTING_APPLIED);
+    QCOMPARE(applySetting(s, pitch, MAX_PITCH_MM, false), SETTING_APPLIED);
+    QCOMPARE(applySetting(s, pitch, 0.05, false), SETTING_INVALID);
+    QCOMPARE(applySetting(s, pitch, 2.1, false), SETTING_INVALID);
+
+    QCOMPARE(applySetting(s, thread, 0, false), SETTING_APPLIED);
+    QCOMPARE(applySetting(s, thread, THREAD_PRESET_COUNT - 1, false), SETTING_APPLIED);
+    QCOMPARE(s.threadIndex, THREAD_PRESET_COUNT - 1);
+    QCOMPARE(applySetting(s, thread, -1, false), SETTING_INVALID);
+    QCOMPARE(applySetting(s, thread, THREAD_PRESET_COUNT, false), SETTING_INVALID);
+
+    QCOMPARE(applySetting(s, angle, -180.0, false), SETTING_APPLIED);
+    QCOMPARE(applySetting(s, angle, 180.0, false), SETTING_APPLIED);
+    QCOMPARE(applySetting(s, angle, 15.5, false), SETTING_APPLIED);
+    COMPARE_DOUBLE(s.plateAngleDeg, 15.5, 1e-12);
+    QCOMPARE(applySetting(s, angle, 181.0, false), SETTING_INVALID);
+    QCOMPARE(applySetting(s, angle, QStringLiteral("abc"), false), SETTING_INVALID);
+
+    QCOMPARE(applySetting(s, QStringLiteral("abInsOptCentres"), true, false), SETTING_UNKNOWN_KEY);
+    QCOMPARE(applySetting(s, QStringLiteral("bogus"), 1, false), SETTING_UNKNOWN_KEY);
+}
+
+void TestTiltCorrection::applySettingLockedByEta()
+{
+    // A connected Wanderer ETA fixes radius, pitch and thread preset of a 3-point plate
+    PlateSettings s = threePoint();
+    QCOMPARE(applySetting(s, QStringLiteral("tiltRadius"), 40.0, true), SETTING_INVALID);
+    QCOMPARE(applySetting(s, QStringLiteral("tiltScrewPitch"), 0.7, true), SETTING_INVALID);
+    QCOMPARE(applySetting(s, QStringLiteral("tiltThreadIndex"), 3, true), SETTING_INVALID);
+    COMPARE_DOUBLE(s.radiusMm, 64.0, 1e-12);
+    COMPARE_DOUBLE(s.screwPitchMm, 0.5, 1e-12);
+    QCOMPARE(s.threadIndex, 8);
+    // Plate type, mode and angle stay adjustable
+    QCOMPARE(applySetting(s, QStringLiteral("tiltRotation"), 30.0, true), SETTING_APPLIED);
+    QCOMPARE(applySetting(s, QStringLiteral("tiltMode"), MODE_PUSH_ONLY, true), SETTING_APPLIED);
+    QCOMPARE(applySetting(s, QStringLiteral("tiltPlateType"), PLATE_4POINT, true), SETTING_APPLIED);
+    // A 4-point plate is not an ETA, so its geometry is free again
+    QCOMPARE(applySetting(s, QStringLiteral("tiltRadius"), 40.0, true), SETTING_APPLIED);
+    COMPARE_DOUBLE(s.radiusMm, 40.0, 1e-12);
 }
 
 void TestTiltCorrection::tiltToJson()

@@ -38,6 +38,7 @@ class FITSViewer;
 namespace Ekos
 {
 
+struct AbInsData;
 class DarkProcessor;
 class FocusAlgorithmInterface;
 class FocusFWHM;
@@ -243,9 +244,35 @@ class Focus : public QWidget, public Ui::Focus
         /**
          * @brief abInsStatus State of the Aberration Inspector for EkosLive clients.
          * @return JSON object with canStart, reasons (see abInsBlockers()), running, lastRun,
-         * lastRunState (none | complete | aborted) and dialogAvailable.
+         * lastRunState (none | complete | aborted), hasResult and dialogAvailable.
          */
         QJsonObject abInsStatus() const;
+
+        /**
+         * @brief abInsLastResult Result of the last Aberration Inspector run as sent to EkosLive clients
+         * (see AberrationInspectorAnalysis::toJson()), or an empty object when no run has completed.
+         */
+        const QJsonObject &abInsLastResult() const
+        {
+            return m_abInsLastResult;
+        }
+
+        /**
+         * @brief abInsSettings Aberration Inspector and tilt plate settings for EkosLive clients.
+         * Keys are the Options property names (abInsTileSelection as a key string: all | outerCorners |
+         * innerDiamond; abInsOptCentres, abInsShowLabels, abInsShowCFZ, tiltPlatePresent, tiltPlateType, tiltMode,
+         * tiltRadius, tiltScrewPitch, tiltThreadIndex, tiltRotation) plus the read-only train name and etaConnected.
+         * The tilt values are the values the advice is computed with for the current optical train: the stored
+         * per-train values, except that a connected Wanderer ETA fixes the radius and pitch of a 3-point plate
+         * (etaConnected is true and those two values are read-only then), like the Tilt Correction Advisory.
+         */
+        QVariantMap abInsSettings() const;
+
+        /**
+         * @brief setAbInsSettings Apply a (partial) settings object received from an EkosLive client.
+         * Unknown keys and invalid values are ignored and logged.
+         */
+        void setAbInsSettings(const QVariantMap &settings);
 
         /**
              * @brief Add CCD to the list of available CCD.
@@ -626,6 +653,8 @@ class Focus : public QWidget, public Ui::Focus
          * and when the inspector run ends (see abInsStatus()).
          */
         void newAbInsStatus(const QJsonObject &status);
+        /** @brief newAbInsResult Emitted when an Aberration Inspector run has been analysed (see abInsLastResult()). */
+        void newAbInsResult(const QJsonObject &result);
 
         // Focus Advisor
         void newFocusAdvisorStage(int stage);
@@ -1531,6 +1560,18 @@ class Focus : public QWidget, public Ui::Focus
         bool m_abInsResultPending = false;
         // State of the last run for abInsStatus(): none | complete | aborted
         QString m_abInsLastState { QStringLiteral("none") };
+        // Result of the last run for EkosLive clients
+        QJsonObject m_abInsLastResult;
+        /**
+         * @brief buildAbInsResult Analyse the data collected during the run (positions, per-tile measures) with
+         * the headless AberrationInspectorAnalysis and the current options, and add the tilt plate advice.
+         */
+        QJsonObject buildAbInsResult(const AbInsData &data);
+        /**
+         * @brief currentOpticalTrainID Id of the selected optical train, or 0 when the combo matches no train
+         * (OpticalTrainManager::id() returns -1 then), which means "global settings" to TiltCorrectionCalc.
+         */
+        uint32_t currentOpticalTrainID() const;
 
         QTimer m_DebounceTimer;
 
