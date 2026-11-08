@@ -275,7 +275,7 @@ These are set automatically by `Tests/testhelpers.h` via the `KTest::setupTestEn
 | [`ekos/analyze/`](ekos/analyze/README.md) | `kstars/ekos/analyze/` | 🔲 | ✅ |
 | [`ekos/auxiliary/`](ekos/auxiliary/README.md) | `kstars/ekos/auxiliary/` dark processor | ⚠️ | ✅ |
 | [`ekos/capture/`](ekos/capture/README.md) | `kstars/ekos/capture/` | ⚠️ | ✅ |
-| [`ekos/focus/`](ekos/focus/README.md) | `kstars/ekos/focus/` algorithms | ✅ | ✅ |
+| [`ekos/focus/`](ekos/focus/README.md) | `kstars/ekos/focus/` algorithms, Aberration Inspector analysis, tilt plate maths | ✅ | ✅ |
 | [`ekos/guide/`](ekos/guide/README.md) | `kstars/ekos/guide/internalguide/` | ✅ | ✅ |
 | [`ekos/mount/`](ekos/mount/README.md) | `kstars/ekos/mount/` meridian flip state | ✅ | ✅ |
 | [`ekos/observatory/`](ekos/observatory/README.md) | `kstars/ekos/observatory/` | 🔲 | ✅ |
@@ -320,7 +320,7 @@ Contributions are welcome — see the stub `README.md` in each directory marked
 | HiPS rendering (`kstars/hips/`) | Requires display + network access to tile servers |
 | Terrain rendering (`kstars/terrain/`) | Requires display and OpenGL |
 | INDI device layer (`kstars/indi/`) | Requires live INDI server (covered indirectly by `kstars_ui` tests) |
-| EkosLive (`kstars/ekos/ekoslive/`) | Requires live EkosLive cloud server |
+| EkosLive (`kstars/ekos/ekoslive/`) | Protocol handlers need an EkosLive server (manual procedure in `ekos/focus/README.md` for the Aberration Inspector commands); the Aberration Inspector analysis and payload builders are unit-tested in `ekos/focus/` |
 | OAL observing log (`kstars/oal/`) | Simple data-transfer classes; low risk |
 
 ---
