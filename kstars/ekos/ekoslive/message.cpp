@@ -895,6 +895,12 @@ void Message::processFocusCommands(const QString &command, const QJsonObject &pa
         return;
     }
 
+    if (command.startsWith(QLatin1String("focus_abins_")))
+    {
+        processAbInsCommands(focus, command, payload);
+        return;
+    }
+
     if (command == commands[FOCUS_START])
         focus->start();
     else if (command == commands[FOCUS_CAPTURE])
@@ -926,6 +932,61 @@ void Message::processFocusCommands(const QString &command, const QJsonObject &pa
         double y = payload["y"].toDouble();
         focus->selectFocusStarFraction(x, y);
     }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////
+///
+///////////////////////////////////////////////////////////////////////////////////////////
+void Message::processAbInsCommands(const QSharedPointer<Ekos::Focus> &focus, const QString &command,
+                                   const QJsonObject &payload)
+{
+    if (command == commands[FOCUS_ABINS_START])
+    {
+        QString reason;
+        const bool accepted = focus->startAbInsRun(&reason);
+        QJsonObject status = focus->abInsStatus();
+        status.insert(QStringLiteral("startAccepted"), accepted);
+        if (!accepted)
+            status.insert(QStringLiteral("error"), reason);
+        sendResponse(commands[FOCUS_ABINS_STATUS], status);
+    }
+    else if (command == commands[FOCUS_ABINS_GET_STATUS])
+        sendAbInsStatus(focus->abInsStatus());
+    else if (command == commands[FOCUS_ABINS_GET_RESULT])
+    {
+        const QJsonObject &result = focus->abInsLastResult();
+        if (result.isEmpty())
+            sendResponse(commands[FOCUS_ABINS_RESULT], QJsonObject {{"available", false}});
+        else
+            sendResponse(commands[FOCUS_ABINS_RESULT], result);
+    }
+    else if (command == commands[FOCUS_ABINS_GET_ALL_SETTINGS])
+        sendResponse(commands[FOCUS_ABINS_GET_ALL_SETTINGS], QJsonObject::fromVariantMap(focus->abInsSettings()));
+    else if (command == commands[FOCUS_ABINS_SET_ALL_SETTINGS])
+    {
+        focus->setAbInsSettings(payload.toVariantMap());
+        // Echo the effective settings so the client can refresh its view
+        sendResponse(commands[FOCUS_ABINS_GET_ALL_SETTINGS], QJsonObject::fromVariantMap(focus->abInsSettings()));
+    }
+    else
+        qCWarning(KSTARS_EKOS) << "Unknown Aberration Inspector command" << command;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////
+///
+///////////////////////////////////////////////////////////////////////////////////////////
+void Message::sendAbInsStatus(const QJsonObject &status)
+{
+    sendResponse(commands[FOCUS_ABINS_STATUS], status);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////
+///
+///////////////////////////////////////////////////////////////////////////////////////////
+void Message::sendAbInsResult(const QJsonObject &result)
+{
+    qCInfo(KSTARS_EKOS) << "EkosLive: Aberration Inspector result for run" << result.value("run").toInt();
+    sendResponse(commands[FOCUS_ABINS_RESULT], result);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -2953,6 +3014,7 @@ void Message::sendStates()
         for (auto it = temperatureState.constBegin(); it != temperatureState.constEnd(); ++it)
             focusState.insert(it.key(), it.value());
         sendResponse(commands[NEW_FOCUS_STATE], focusState);
+        sendResponse(commands[FOCUS_ABINS_STATUS], focuser->abInsStatus());
     }
 
     if (m_Manager->guideModule())
@@ -3217,6 +3279,7 @@ void Message::sendModuleState(const QString &name)
         for (auto it = temperatureState.constBegin(); it != temperatureState.constEnd(); ++it)
             focusState.insert(it.key(), it.value());
         sendResponse(commands[NEW_FOCUS_STATE], focusState);
+        sendResponse(commands[FOCUS_ABINS_STATUS], focuser->abInsStatus());
     }
     else if (name == "Guide")
     {

@@ -3951,6 +3951,12 @@ void Manager::connectModules()
 
         connect(focusModule()->mainFocuser().get(), &Ekos::Focus::autofocusAborted,
                 ekosLiveClient.get()->message(), &EkosLive::Message::autofocusAborted, Qt::UniqueConnection);
+
+        // Aberration Inspector status and results
+        connect(focusModule()->mainFocuser().get(), &Ekos::Focus::newAbInsStatus,
+                ekosLiveClient.get()->message(), &EkosLive::Message::sendAbInsStatus, Qt::UniqueConnection);
+        connect(focusModule()->mainFocuser().get(), &Ekos::Focus::newAbInsResult,
+                ekosLiveClient.get()->message(), &EkosLive::Message::sendAbInsResult, Qt::UniqueConnection);
     }
 
     // Guide <--> EkosLive Connections

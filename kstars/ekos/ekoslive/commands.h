@@ -137,6 +137,14 @@ enum COMMANDS
     FOCUS_SET_ALL_SETTINGS,
     FOCUS_GET_ALL_SETTINGS,
     FOCUS_SET_CROSSHAIR,
+    // Aberration Inspector
+    FOCUS_ABINS_START,
+    FOCUS_ABINS_GET_STATUS,
+    FOCUS_ABINS_STATUS,
+    FOCUS_ABINS_GET_RESULT,
+    FOCUS_ABINS_RESULT,
+    FOCUS_ABINS_GET_ALL_SETTINGS,
+    FOCUS_ABINS_SET_ALL_SETTINGS,
 
     // Guide
     GUIDE_START,
@@ -441,6 +449,13 @@ static QMap<COMMANDS, QString> const commands =
     {FOCUS_SET_ALL_SETTINGS, "focus_set_all_settings"},
     {FOCUS_GET_ALL_SETTINGS, "focus_get_all_settings"},
     {FOCUS_SET_CROSSHAIR, "focus_set_crosshair"},
+    {FOCUS_ABINS_START, "focus_abins_start"},
+    {FOCUS_ABINS_GET_STATUS, "focus_abins_get_status"},
+    {FOCUS_ABINS_STATUS, "focus_abins_status"},
+    {FOCUS_ABINS_GET_RESULT, "focus_abins_get_result"},
+    {FOCUS_ABINS_RESULT, "focus_abins_result"},
+    {FOCUS_ABINS_GET_ALL_SETTINGS, "focus_abins_get_all_settings"},
+    {FOCUS_ABINS_SET_ALL_SETTINGS, "focus_abins_set_all_settings"},
 
     {SCHEDULER_GET_ALL_SETTINGS, "scheduler_get_all_settings"},
     {SCHEDULER_SET_ALL_SETTINGS, "scheduler_set_all_settings"},

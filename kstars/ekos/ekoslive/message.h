@@ -142,6 +142,10 @@ class Message : public QObject
 
         // Focus
         void autofocusAborted();
+        /** @brief sendAbInsStatus Push the Aberration Inspector status (focus_abins_status). */
+        void sendAbInsStatus(const QJsonObject &status);
+        /** @brief sendAbInsResult Push the result of an Aberration Inspector run (focus_abins_result). */
+        void sendAbInsResult(const QJsonObject &result);
 
         // DSLR
         void requestDSLRInfo(const QString &cameraName);
@@ -209,6 +213,19 @@ class Message : public QObject
 
         // Focus
         void processFocusCommands(const QString &command, const QJsonObject &payload);
+        /**
+         * @brief processAbInsCommands Aberration Inspector commands (focus_abins_*), on the main focuser:
+         * focus_abins_start (reply focus_abins_status with startAccepted and, when rejected, error),
+         * focus_abins_get_status (reply focus_abins_status), focus_abins_get_result (reply focus_abins_result,
+         * {"available": false} when no run has completed), focus_abins_get_all_settings and
+         * focus_abins_set_all_settings (both reply focus_abins_get_all_settings with the effective settings).
+         * focus_abins_status is also pushed when a run starts, has been analysed or ends, and in get_states;
+         * focus_abins_result is pushed when a run has been analysed. Only the reply to focus_abins_start carries
+         * startAccepted: an accepted start pushes a status (running true) before that reply arrives, so clients
+         * must match the reply on the presence of startAccepted, not on the first status received.
+         */
+        void processAbInsCommands(const QSharedPointer<Ekos::Focus> &focus, const QString &command,
+                                  const QJsonObject &payload);
 
         // Guide
         void processGuideCommands(const QString &command, const QJsonObject &payload);
