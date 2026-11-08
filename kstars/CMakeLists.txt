@@ -352,6 +352,7 @@ if (INDI_FOUND)
             ekos/focus/focusstars.cpp
             ekos/focus/curvefit.cpp
             ekos/focus/aberrationinspectoranalysis.cpp
+            ekos/focus/tiltcorrectioncalc.cpp
             ekos/focus/focusfwhm.cpp
             ekos/focus/focusfourierpower.cpp
             ekos/focus/focusblurriness.cpp

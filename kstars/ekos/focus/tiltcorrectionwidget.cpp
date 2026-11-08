@@ -9,7 +9,6 @@
 #include "Options.h"
 #include "indi/indilistener.h"
 #include "indi/clientmanager.h"
-#include "ekos/auxiliary/opticaltrainsettings.h"
 
 #include <KLocalizedString>
 
@@ -272,38 +271,6 @@ class TiltDiagramWidget : public QWidget
         bool m_valid { false };
         double m_plateAngleDegrees { 0.0 };
 };
-
-// Map a screw's math angle (radians, incl. plate rotation) to a human-readable position
-// word describing where it appears in the rear-view diagram. In that view the visual
-// axes are: right = -cos(angle), up = sin(angle) (LR mirrored, screen-Y is down).
-static QString tiltPositionWord(double angleRad)
-{
-    const double right = -std::cos(angleRad);
-    const double up = std::sin(angleRad);
-    double deg = std::atan2(up, right) * 180.0 / M_PI;  // 0 = right, 90 = top
-    if (deg < 0)
-        deg += 360.0;
-    const int idx = static_cast<int>(std::lround(deg / 45.0)) % 8;
-    switch (idx)
-    {
-        case 0:
-            return i18nc("screw position", "right");
-        case 1:
-            return i18nc("screw position", "upper-right");
-        case 2:
-            return i18nc("screw position", "top");
-        case 3:
-            return i18nc("screw position", "upper-left");
-        case 4:
-            return i18nc("screw position", "left");
-        case 5:
-            return i18nc("screw position", "lower-left");
-        case 6:
-            return i18nc("screw position", "bottom");
-        default:
-            return i18nc("screw position", "lower-right");
-    }
-}
 
 // ============================================================================
 // TiltCorrectionWidget implementation
@@ -572,13 +539,13 @@ void TiltCorrectionWidget::recalculate()
 void TiltCorrectionWidget::detectETADevice()
 {
     QSharedPointer<ISD::GenericDevice> device;
-    bool etaConnected = INDIListener::findDevice(QStringLiteral("Wanderer ETA M54"), device);
+    bool etaConnected = INDIListener::findDevice(TiltCorrectionCalc::etaDeviceName(), device);
 
     if (etaConnected && m_plateType == PLATE_3POINT)
     {
         // Auto-fill ETA geometry if not already set
-        constexpr double ETA_RADIUS = 64.0;
-        constexpr double ETA_PITCH = 0.50;
+        constexpr double ETA_RADIUS = TiltCorrectionCalc::ETA_RADIUS_MM;
+        constexpr double ETA_PITCH = TiltCorrectionCalc::ETA_PITCH_MM;
 
         if (std::abs(m_radius - ETA_RADIUS) > 0.1)
         {
@@ -626,7 +593,7 @@ void TiltCorrectionWidget::updateVisibility()
     //   1. A Wanderer ETA device is connected (auto-detect), OR
     //   2. The user has explicitly enabled the tilt plate option
     QSharedPointer<ISD::GenericDevice> device;
-    bool etaConnected = INDIListener::findDevice(QStringLiteral("Wanderer ETA M54"), device);
+    bool etaConnected = INDIListener::findDevice(TiltCorrectionCalc::etaDeviceName(), device);
     setVisible(etaConnected || Options::tiltPlatePresent());
 }
 
@@ -641,47 +608,12 @@ void TiltCorrectionWidget::calc3Point()
     // LR slope: microns per micron across sensor width
     // TB slope: microns per micron across sensor height
 
-    double lrSlope = (m_sensorWidthMicrons > 0) ? m_lrMicrons / m_sensorWidthMicrons : 0.0;
-    double tbSlope = (m_sensorHeightMicrons > 0) ? m_tbMicrons / m_sensorHeightMicrons : 0.0;
-
-    // Convert radius from mm to microns for consistent units
-    double R = m_radius * 1000.0;  // mm to microns
-
-    // Tilt-plate rotation: the screw ring may sit at a fixed angular offset relative to
-    // the sensor (e.g. a 3-point plate bolted at 15°). The measured tilt plane is fixed
-    // in sensor coordinates, so we simply re-evaluate each screw's required piston at its
-    // rotated position — no new focus run needed. Positive = clockwise viewed from behind,
-    // the same sign as the diagram's painter rotation (so the number lands under the screw
-    // the user actually sees).
-    const double phi = m_plateAngleDegrees * M_PI / 180.0;
-
-    // Point positions relative to center (front view), plus plate rotation phi:
-    // Point 1: angle 150° (upper-right in rear view)
-    // Point 2: angle 270° (bottom)
-    // Point 3: angle 30°  (upper-left in rear view)
-    double angles[3] = { 150.0 * M_PI / 180.0 + phi, 270.0 * M_PI / 180.0 + phi, 30.0 * M_PI / 180.0 + phi };
-
-    // For each point, the correction needed is the NEGATIVE of the tilt at that position
-    // Z_correction = -(lrSlope * x + tbSlope * y)
-    // These are RELATIVE deltas — apply on top of current position, can be + or -.
-    for (int i = 0; i < 3; i++)
+    const TiltCorrectionCalc::Result correction = TiltCorrectionCalc::compute(
     {
-        double x = R * std::cos(angles[i]);
-        double y = R * std::sin(angles[i]);
-        m_adj[i] = -(lrSlope * x + tbSlope * y);
-    }
-
-    // Convert from microns to mm for display
-    for (int i = 0; i < 3; i++)
-        m_adj[i] /= 1000.0;
-
-    // Apply push-only normalization if requested: shift values so minimum is 0
-    if (m_mode == MODE_PUSH_ONLY)
-    {
-        double minAdj = *std::min_element(m_adj, m_adj + 3);
-        for (int i = 0; i < 3; i++)
-            m_adj[i] -= minAdj;
-    }
+        m_lrMicrons, m_tbMicrons, m_sensorWidthMicrons, m_sensorHeightMicrons
+    }, currentPlateSettings());
+    for (int i = 0; i < correction.count; i++)
+        m_adj[i] = correction.adjustmentMm[i];
 
     // Update labels — show signed deltas (apply all together)
     auto formatPoint = [this](int idx, const QString & name) -> QString
@@ -702,11 +634,11 @@ void TiltCorrectionWidget::calc3Point()
     // plates only the position + amount matter; for the ETA the index stays bound to the
     // physical motor (Point 1/2/3) used by "Apply to ETA".
     m_point1Label->setText(formatPoint(0, i18nc("3-point tilt plate screw", "Point 1 (%1)",
-                                       tiltPositionWord(angles[0]))));
+                                       TiltCorrectionCalc::positionWord(correction.positionIndex[0]))));
     m_point2Label->setText(formatPoint(1, i18nc("3-point tilt plate screw", "Point 2 (%1)",
-                                       tiltPositionWord(angles[1]))));
+                                       TiltCorrectionCalc::positionWord(correction.positionIndex[1]))));
     m_point3Label->setText(formatPoint(2, i18nc("3-point tilt plate screw", "Point 3 (%1)",
-                                       tiltPositionWord(angles[2]))));
+                                       TiltCorrectionCalc::positionWord(correction.positionIndex[2]))));
 
     double maxAbs = std::max({std::abs(m_adj[0]), std::abs(m_adj[1]), std::abs(m_adj[2])});
     QString modeLabel = (m_mode == MODE_PUSH_ONLY)
@@ -738,39 +670,12 @@ void TiltCorrectionWidget::calc4Point()
     //   Screw 3: bottom-left in rear view (above sensor corner BR)
     //   Screw 4: bottom-right in rear view (above sensor corner BL)
 
-    double lrSlope = (m_sensorWidthMicrons > 0) ? m_lrMicrons / m_sensorWidthMicrons : 0.0;
-    double tbSlope = (m_sensorHeightMicrons > 0) ? m_tbMicrons / m_sensorHeightMicrons : 0.0;
-
-    double R = m_radius * 1000.0;  // mm to microns
-
-    // Tilt-plate rotation (see calc3Point): re-evaluate each corner screw's piston at its
-    // rotated position from the same measured tilt plane — no new focus run needed.
-    const double phi = m_plateAngleDegrees * M_PI / 180.0;
-
-    // Screw base angles reproduce the corner layout drawn in the rear-view diagram:
-    //   Screw 1 = 45°  (top-left in rear view)
-    //   Screw 2 = 135° (top-right)
-    //   Screw 3 = 315° (bottom-left)
-    //   Screw 4 = 225° (bottom-right)
-    // m_adj[0..3] correspond to Screw 1..4. At phi = 0 this is identical to the previous
-    // (±C, ±C) body-frame formulation.
-    double angles[4] = { 45.0 * M_PI / 180.0 + phi, 135.0 * M_PI / 180.0 + phi,
-                         315.0 * M_PI / 180.0 + phi, 225.0 * M_PI / 180.0 + phi
-                       };
-    for (int i = 0; i < 4; i++)
+    const TiltCorrectionCalc::Result correction = TiltCorrectionCalc::compute(
     {
-        double x = R * std::cos(angles[i]);
-        double y = R * std::sin(angles[i]);
-        m_adj[i] = -(lrSlope * x + tbSlope * y) / 1000.0;
-    }
-
-    // Apply push-only normalization if requested: shift values so minimum is 0
-    if (m_mode == MODE_PUSH_ONLY)
-    {
-        double minAdj = *std::min_element(m_adj, m_adj + 4);
-        for (int i = 0; i < 4; i++)
-            m_adj[i] -= minAdj;
-    }
+        m_lrMicrons, m_tbMicrons, m_sensorWidthMicrons, m_sensorHeightMicrons
+    }, currentPlateSettings());
+    for (int i = 0; i < correction.count; i++)
+        m_adj[i] = correction.adjustmentMm[i];
 
     // Update labels
     auto formatPoint = [this](int idx, const QString & name) -> QString
@@ -789,13 +694,13 @@ void TiltCorrectionWidget::calc4Point()
     // Position words follow the (rotated) screw angle. The screw number is just a tag;
     // for manual plates only position + amount matter.
     m_point1Label->setText(formatPoint(0, i18nc("4-point tilt plate screw", "Screw 1 (%1)",
-                                       tiltPositionWord(angles[0]))));
+                                       TiltCorrectionCalc::positionWord(correction.positionIndex[0]))));
     m_point2Label->setText(formatPoint(1, i18nc("4-point tilt plate screw", "Screw 2 (%1)",
-                                       tiltPositionWord(angles[1]))));
+                                       TiltCorrectionCalc::positionWord(correction.positionIndex[1]))));
     m_point3Label->setText(formatPoint(2, i18nc("4-point tilt plate screw", "Screw 3 (%1)",
-                                       tiltPositionWord(angles[2]))));
+                                       TiltCorrectionCalc::positionWord(correction.positionIndex[2]))));
     m_point4Label->setText(formatPoint(3, i18nc("4-point tilt plate screw", "Screw 4 (%1)",
-                                       tiltPositionWord(angles[3]))));
+                                       TiltCorrectionCalc::positionWord(correction.positionIndex[3]))));
 
     double maxAbs = std::max(
     {
@@ -835,22 +740,7 @@ void TiltCorrectionWidget::loadSettings()
 {
     // Per-train settings (if any). Missing keys fall back to the global Options values,
     // so a train that was never configured inherits the last global defaults.
-    QVariantMap trainMap;
-    if (m_opticalTrainID != 0)
-    {
-        OpticalTrainSettings::Instance()->setOpticalTrainID(m_opticalTrainID);
-        auto stored = OpticalTrainSettings::Instance()->getOneSetting(OpticalTrainSettings::FocusTilt);
-        if (stored.isValid())
-            trainMap = stored.toJsonObject().toVariantMap();
-    }
-    auto asInt = [&trainMap](const QString & key, int fallback) -> int
-    {
-        return trainMap.contains(key) ? trainMap.value(key).toInt() : fallback;
-    };
-    auto asDouble = [&trainMap](const QString & key, double fallback) -> double
-    {
-        return trainMap.contains(key) ? trainMap.value(key).toDouble() : fallback;
-    };
+    const TiltCorrectionCalc::PlateSettings stored = TiltCorrectionCalc::load(m_opticalTrainID);
 
     // Block signals while restoring to avoid triggering recalc/save loops
     m_plateTypeCombo->blockSignals(true);
@@ -860,32 +750,32 @@ void TiltCorrectionWidget::loadSettings()
     m_plateAngleSpin->blockSignals(true);
     m_modeCombo->blockSignals(true);
 
-    int plateType = asInt(QStringLiteral("plateType"), Options::tiltPlateType());
+    int plateType = stored.plateType;
     if (plateType >= 0 && plateType < m_plateTypeCombo->count())
         m_plateTypeCombo->setCurrentIndex(plateType);
     m_plateType = static_cast<PlateType>(m_plateTypeCombo->currentData().toInt());
     m_point4Label->setVisible(m_plateType == PLATE_4POINT);
     m_applyETAButton->setVisible(m_plateType == PLATE_3POINT);
 
-    double radius = asDouble(QStringLiteral("radius"), Options::tiltRadius());
+    double radius = stored.radiusMm;
     m_radiusSpin->setValue(radius);
     m_radius = radius;
 
-    int threadIndex = asInt(QStringLiteral("threadIndex"), Options::tiltThreadIndex());
+    int threadIndex = stored.threadIndex;
     if (threadIndex >= 0 && threadIndex < m_threadPresetCombo->count())
         m_threadPresetCombo->setCurrentIndex(threadIndex);
 
-    double screwPitch = asDouble(QStringLiteral("screwPitch"), Options::tiltScrewPitch());
+    double screwPitch = stored.screwPitchMm;
     m_screwPitchSpin->setValue(screwPitch);
     m_screwPitch = screwPitch;
 
-    // Plate angle (Options::tiltRotation() is the global default — repurposed from the old
+    // Plate angle (the global default is Options::tiltRotation(), repurposed from the old
     // camera-rotation control; same stored value, new meaning).
-    double plateAngle = asDouble(QStringLiteral("plateAngle"), Options::tiltRotation());
+    double plateAngle = stored.plateAngleDeg;
     m_plateAngleSpin->setValue(plateAngle);
     m_plateAngleDegrees = plateAngle;
 
-    int mode = asInt(QStringLiteral("mode"), Options::tiltMode());
+    int mode = stored.mode;
     if (mode >= 0 && mode < m_modeCombo->count())
         m_modeCombo->setCurrentIndex(mode);
     m_mode = static_cast<AdjustmentMode>(m_modeCombo->currentData().toInt());
@@ -900,27 +790,29 @@ void TiltCorrectionWidget::loadSettings()
 
 void TiltCorrectionWidget::saveSettings()
 {
-    // Always update the global defaults so a brand-new train inherits the latest values.
-    Options::setTiltPlateType(m_plateTypeCombo->currentIndex());
-    Options::setTiltRadius(m_radiusSpin->value());
-    Options::setTiltThreadIndex(m_threadPresetCombo->currentIndex());
-    Options::setTiltScrewPitch(m_screwPitchSpin->value());
-    Options::setTiltRotation(m_plateAngleSpin->value());  // stores the plate angle
-    Options::setTiltMode(m_modeCombo->currentIndex());
+    // Persist the values shown by the widgets: the global defaults always (so a brand-new train inherits the
+    // latest values) and the current optical train when we know which one we're on.
+    TiltCorrectionCalc::PlateSettings settings;
+    settings.plateType = m_plateTypeCombo->currentIndex();
+    settings.radiusMm = m_radiusSpin->value();
+    settings.threadIndex = m_threadPresetCombo->currentIndex();
+    settings.screwPitchMm = m_screwPitchSpin->value();
+    settings.plateAngleDeg = m_plateAngleSpin->value();
+    settings.mode = m_modeCombo->currentIndex();
+    TiltCorrectionCalc::save(m_opticalTrainID, settings);
+}
 
-    // Also persist per optical train when we know which one we're on.
-    if (m_opticalTrainID != 0)
-    {
-        QVariantMap trainMap;
-        trainMap[QStringLiteral("plateType")]   = m_plateTypeCombo->currentIndex();
-        trainMap[QStringLiteral("radius")]      = m_radiusSpin->value();
-        trainMap[QStringLiteral("threadIndex")] = m_threadPresetCombo->currentIndex();
-        trainMap[QStringLiteral("screwPitch")]  = m_screwPitchSpin->value();
-        trainMap[QStringLiteral("plateAngle")]  = m_plateAngleSpin->value();
-        trainMap[QStringLiteral("mode")]        = m_modeCombo->currentIndex();
-        OpticalTrainSettings::Instance()->setOpticalTrainID(m_opticalTrainID);
-        OpticalTrainSettings::Instance()->setOneSetting(OpticalTrainSettings::FocusTilt, trainMap);
-    }
+// The plate settings the correction is calculated with (the members mirror the widgets)
+TiltCorrectionCalc::PlateSettings TiltCorrectionWidget::currentPlateSettings() const
+{
+    TiltCorrectionCalc::PlateSettings settings;
+    settings.plateType = static_cast<int>(m_plateType);
+    settings.radiusMm = m_radius;
+    settings.threadIndex = m_threadPresetCombo->currentIndex();
+    settings.screwPitchMm = m_screwPitch;
+    settings.plateAngleDeg = m_plateAngleDegrees;
+    settings.mode = static_cast<int>(m_mode);
+    return settings;
 }
 
 // ============================================================================
@@ -942,7 +834,7 @@ void TiltCorrectionWidget::applyToETA()
 
     // 1. Find the Wanderer ETA device
     QSharedPointer<ISD::GenericDevice> device;
-    if (!INDIListener::findDevice(QStringLiteral("Wanderer ETA M54"), device))
+    if (!INDIListener::findDevice(TiltCorrectionCalc::etaDeviceName(), device))
     {
         m_summaryLabel->setText(i18n("⚠ Wanderer ETA M54 not connected"));
         m_applyETAButton->setEnabled(false);

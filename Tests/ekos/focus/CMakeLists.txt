@@ -20,3 +20,8 @@ ADD_EXECUTABLE( testaberrationinspector testaberrationinspector.cpp )
 TARGET_LINK_LIBRARIES( testaberrationinspector ${TEST_LIBRARIES})
 ADD_TEST( NAME AberrationInspectorTest COMMAND testaberrationinspector )
 SET_TESTS_PROPERTIES( AberrationInspectorTest PROPERTIES LABELS "stable")
+
+ADD_EXECUTABLE( testtiltcorrection testtiltcorrection.cpp )
+TARGET_LINK_LIBRARIES( testtiltcorrection ${TEST_LIBRARIES})
+ADD_TEST( NAME TiltCorrectionTest COMMAND testtiltcorrection )
+SET_TESTS_PROPERTIES( TiltCorrectionTest PROPERTIES LABELS "stable")

@@ -17,6 +17,7 @@
 #include <cstdint>
 
 #include "indi/indiproperty.h"
+#include "tiltcorrectioncalc.h"
 
 namespace ISD
 {
@@ -99,6 +100,8 @@ class TiltCorrectionWidget : public QGroupBox
         void recalculate();
         void loadSettings();
         void saveSettings();
+        /** @brief The plate settings the correction is calculated with. */
+        TiltCorrectionCalc::PlateSettings currentPlateSettings() const;
 
         /**
          * @brief Apply the computed corrections to the Wanderer ETA M54 via INDI.
