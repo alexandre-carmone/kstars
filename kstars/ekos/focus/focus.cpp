@@ -52,6 +52,7 @@
 #include <config-kstars.h>
 
 #include <cmath>
+#include <QJsonArray>
 
 #ifdef HAVE_QTGRAPHS
 #include "aberrationinspector.h"
@@ -1096,11 +1097,128 @@ void Focus::showNextAFRun()
         refreshMeasuresDisplay();
 }
 
-// Run Aberration Inspector
+// Run Aberration Inspector (Start button of the tool)
 void Focus::startAbIns()
 {
-    m_abInsOn = canAbInsStart();
+    startAbInsRun();
+}
+
+// Reasons why an Aberration Inspector run cannot start, as machine-readable codes. Empty means it can start.
+QStringList Focus::abInsBlockers() const
+{
+    QStringList blockers;
+    if (m_Focuser == nullptr)
+        blockers << QStringLiteral("noFocuser");
+    else if (!m_Focuser->isConnected())
+        blockers << QStringLiteral("focuserNotConnected");
+    if (m_Camera == nullptr)
+        blockers << QStringLiteral("noCamera");
+    else if (!m_Camera->isConnected())
+        blockers << QStringLiteral("cameraNotConnected");
+    // The prerequisites of canAbInsStart()
+    if (!canAbsMove)
+        blockers << QStringLiteral("focuserNotAbsolute");
+    if (m_FocusAlgorithm != FOCUS_LINEAR1PASS)
+        blockers << QStringLiteral("algorithmNotLinear1Pass");
+    if (m_currentImageMask != FOCUS_MASK_MOSAIC)
+        blockers << QStringLiteral("maskNotMosaic");
+    if (m_CurveFit == CurveFitting::FOCUS_QUADRATIC)
+        blockers << QStringLiteral("curveFitQuadratic");
+    // Busy states: an inspector run in progress, and the states in which runAutoFocus() would discard, defer
+    // or reject the request
+    if (m_abInsOn)
+        blockers << QStringLiteral("inspectorRunning");
+    if (inAutoFocus)
+        blockers << QStringLiteral("autofocusRunning");
+    if (inAdjustFocus)
+        blockers << QStringLiteral("adjustFocusRunning");
+    if (adaptFocus && adaptFocus->inAdaptiveFocus())
+        blockers << QStringLiteral("adaptiveFocusRunning");
+    if (inFocusLoop)
+        blockers << QStringLiteral("focusLoopRunning");
+    if (inBuildOffsets)
+        blockers << QStringLiteral("buildOffsetsRunning");
+    return blockers;
+}
+
+// Translated explanation of an abInsBlockers() code, for the Focus log and for the EkosLive reply
+static QString abInsBlockerText(const QString &code)
+{
+    if (code == QLatin1String("noFocuser"))
+        return i18n("No focuser connected.");
+    if (code == QLatin1String("focuserNotConnected"))
+        return i18n("Focuser is not connected.");
+    if (code == QLatin1String("noCamera"))
+        return i18n("No camera connected.");
+    if (code == QLatin1String("cameraNotConnected"))
+        return i18n("Camera is not connected.");
+    if (code == QLatin1String("focuserNotAbsolute"))
+        return i18n("Focuser does not support absolute positions.");
+    if (code == QLatin1String("algorithmNotLinear1Pass"))
+        return i18n("Focus algorithm must be Linear 1 Pass.");
+    if (code == QLatin1String("maskNotMosaic"))
+        return i18n("Mosaic mask must be selected.");
+    if (code == QLatin1String("curveFitQuadratic"))
+        return i18n("Curve fit must not be Quadratic.");
+    if (code == QLatin1String("inspectorRunning"))
+        return i18n("Aberration Inspector is already running.");
+    if (code == QLatin1String("autofocusRunning"))
+        return i18n("Autofocus is already running.");
+    if (code == QLatin1String("adjustFocusRunning"))
+        return i18n("Adjust Focus is in progress.");
+    if (code == QLatin1String("adaptiveFocusRunning"))
+        return i18n("Adaptive Focus is in progress.");
+    if (code == QLatin1String("focusLoopRunning"))
+        return i18n("Focus loop is running.");
+    if (code == QLatin1String("buildOffsetsRunning"))
+        return i18n("Build Offsets is running.");
+    return code;
+}
+
+// Start an Aberration Inspector run. The request is checked before m_abInsOn is set: runAutoFocus() discards a
+// request while an autofocus is already running without calling stop(), so setting the flag first would make the
+// running autofocus collect inspector data and launch the inspector when it completes.
+bool Focus::startAbInsRun(QString *reason)
+{
+    const QStringList blockers = abInsBlockers();
+    if (!blockers.isEmpty())
+    {
+        QStringList texts;
+        for (const QString &code : blockers)
+            texts << abInsBlockerText(code);
+        const QString why = i18n("Aberration Inspector cannot start: %1", texts.join(QLatin1Char(' ')));
+        appendLogText(why);
+        qCInfo(KSTARS_EKOS_FOCUS) << "Aberration Inspector start rejected:" << blockers;
+        if (reason)
+            *reason = why;
+        return false;
+    }
+
+    m_abInsOn = true;
+    m_abInsResultPending = true;
+    // The status now reports inspectorRunning, so a second request is refused until the run ends
+    Q_EMIT newAbInsStatus(abInsStatus());
     runAutoFocus(AutofocusReason::FOCUS_ABERRATION_INSPECTOR, "");
+    // A rejection inside runAutoFocus() reaches stop() synchronously, which clears the flag
+    return m_abInsOn;
+}
+
+// Aberration Inspector state for EkosLive clients
+QJsonObject Focus::abInsStatus() const
+{
+    const QStringList blockers = abInsBlockers();
+    QJsonObject status;
+    status.insert(QStringLiteral("canStart"), blockers.isEmpty());
+    status.insert(QStringLiteral("reasons"), QJsonArray::fromStringList(blockers));
+    status.insert(QStringLiteral("running"), m_abInsOn);
+    status.insert(QStringLiteral("lastRun"), m_abInsRun);
+    status.insert(QStringLiteral("lastRunState"), m_abInsLastState);
+#ifdef HAVE_QTGRAPHS
+    status.insert(QStringLiteral("dialogAvailable"), true);
+#else
+    status.insert(QStringLiteral("dialogAvailable"), false);
+#endif
+    return status;
 }
 
 // User pressed the Autofocus button
@@ -1842,7 +1960,17 @@ void Focus::stop(Ekos::FocusState completionState)
     minimumRequiredHFR = INVALID_STAR_MEASURE;
     noStarCount = 0;
     starMeasureFrames.clear();
-    m_abInsOn = false;
+    if (m_abInsOn)
+    {
+        m_abInsOn = false;
+        if (m_abInsResultPending)
+        {
+            // The run ended before the Aberration Inspector could analyse it
+            m_abInsResultPending = false;
+            m_abInsLastState = QStringLiteral("aborted");
+        }
+        Q_EMIT newAbInsStatus(abInsStatus());
+    }
     m_StartRetries = 0;
     m_AFRerun = false;
     m_R2Retries = 0;
@@ -3830,12 +3958,23 @@ void Focus::startAberrationInspector()
     // Current optical train id so the Tilt Correction Advisory persists its settings per train.
     data.opticalTrainID = OpticalTrainManager::Instance()->id(opticalTrainCombo->currentText());
 
+    m_abInsResultPending = false;
+    m_abInsLastState = QStringLiteral("complete");
+    Q_EMIT newAbInsStatus(abInsStatus());
+
     // Launch the Aberration Inspector.
     appendLogText(i18n("Launching Aberration Inspector run %1...", m_abInsRun));
     QPointer<AberrationInspector> abIns(new AberrationInspector(data, m_abInsPosition, m_abInsMeasure, m_abInsWeight,
                                         m_abInsNumStars, m_abInsTileCenterOffset));
     abIns->setAttribute(Qt::WA_DeleteOnClose);
     abIns->show();
+#else
+    // Without Qt Graphs there is no dialog; the run still counts for abInsStatus()
+    ++m_abInsRun;
+    appendLogText(i18n("Aberration Inspector run %1 complete (KStars was built without Qt Graphs, no dialog).", m_abInsRun));
+    m_abInsResultPending = false;
+    m_abInsLastState = QStringLiteral("complete");
+    Q_EMIT newAbInsStatus(abInsStatus());
 #endif
 }
 

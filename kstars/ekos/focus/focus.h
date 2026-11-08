@@ -224,6 +224,30 @@ class Focus : public QWidget, public Ui::Focus
         QJsonObject temperatureState() const;
 
         /**
+         * @brief abInsBlockers Machine-readable reasons why an Aberration Inspector run cannot start right now.
+         * @return empty when a run can start; otherwise codes among noFocuser, focuserNotConnected, noCamera,
+         * cameraNotConnected, focuserNotAbsolute, algorithmNotLinear1Pass, maskNotMosaic, curveFitQuadratic,
+         * inspectorRunning, autofocusRunning, adjustFocusRunning, adaptiveFocusRunning, focusLoopRunning,
+         * buildOffsetsRunning.
+         */
+        QStringList abInsBlockers() const;
+
+        /**
+         * @brief startAbInsRun Start an Aberration Inspector autofocus run, like the Start button of the tool.
+         * The prerequisites are checked first so that a rejected request leaves a running autofocus untouched.
+         * @param reason when the run is rejected, receives the translated reason.
+         * @return true when the run was started.
+         */
+        bool startAbInsRun(QString *reason = nullptr);
+
+        /**
+         * @brief abInsStatus State of the Aberration Inspector for EkosLive clients.
+         * @return JSON object with canStart, reasons (see abInsBlockers()), running, lastRun,
+         * lastRunState (none | complete | aborted) and dialogAvailable.
+         */
+        QJsonObject abInsStatus() const;
+
+        /**
              * @brief Add CCD to the list of available CCD.
              * @param newCCD pointer to CCD device.
              * @return True if added successfully, false if duplicate or failed to add.
@@ -595,6 +619,13 @@ class Focus : public QWidget, public Ui::Focus
                                const QString &curve, const QString &title, const QString &trainname);
         void autofocusAborted(const QString &filter, const QString &points, const bool useWeights,
                               const AutofocusFailReason failCode, const QString &failCodeInfo, const QString &trainname);
+
+        // Aberration Inspector, for EkosLive
+        /**
+         * @brief newAbInsStatus Emitted when an Aberration Inspector run is started, when a run has been analysed
+         * and when the inspector run ends (see abInsStatus()).
+         */
+        void newAbInsStatus(const QJsonObject &status);
 
         // Focus Advisor
         void newFocusAdvisorStage(int stage);
@@ -1496,6 +1527,10 @@ class Focus : public QWidget, public Ui::Focus
         QVector<QVector<double>> m_abInsWeight;
         QVector<QVector<int>> m_abInsNumStars;
         QVector<QPoint> m_abInsTileCenterOffset;
+        // Set from startAbInsRun() until the run has been analysed; still set in stop() means the run was aborted
+        bool m_abInsResultPending = false;
+        // State of the last run for abInsStatus(): none | complete | aborted
+        QString m_abInsLastState { QStringLiteral("none") };
 
         QTimer m_DebounceTimer;
 
