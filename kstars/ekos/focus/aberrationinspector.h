@@ -16,6 +16,7 @@
 #include "ui_aberrationinspector.h"
 #include "aberrationinspectorutils.h"
 #include "tiltcorrectionwidget.h"
+#include "aberrationinspectoranalysis.h"
 
 // The AberrationInspector class manages the Aberration Inspector dialog.
 // The inspector's own settings (tile selection, labels, CFZ, ...) are managed in a global way, rather than per Optical Train
@@ -78,26 +79,10 @@ class AberrationInspector : public QDialog, public Ui::aberrationInspectorDialog
 
     public:
 
-        typedef enum { TILES_ALL, TILES_OUTER_CORNERS, TILES_INNER_DIAMOND } TileSelection;
-        struct abInsData
-        {
-            int run;
-            CurveFitting::CurveFit curveFit;
-            bool useWeights;
-            CurveFitting::OptimisationDirection optDir;
-            int sensorWidth;
-            int sensorHeight;
-            double pixelSize;
-            int tileWidth;
-            double focuserStepMicrons;
-            QString yAxisLabel;
-            double starUnits;
-            double cfzSteps;
-            bool isPositionBased;
-            // Optical train id, so the Tilt Correction Advisory can persist its settings
-            // per train (0 = unknown → falls back to global settings).
-            uint32_t opticalTrainID = 0;
-        };
+        // The tile selection and run data live in AberrationInspectorAnalysis so that the headless analysis
+        // (used by EkosLive) and Focus can use them without the Qt Graphs dependency of this dialog.
+        using TileSelection = AberrationInspectorAnalysis::TileSelection;
+        using abInsData = AbInsData;
 
         /**
          * @brief create an AberrationInspector with the associated data
@@ -248,26 +233,9 @@ class AberrationInspector : public QDialog, public Ui::aberrationInspectorDialog
         void tableResize();
 
         /**
-         * @brief calculate backfocus based on user selection
-         * @param tileSelection
-         * @param calculated backfocusDelta
-         * @return success = true
+         * @brief the analysis settings currently selected in the dialog (tile selection, optimise centres, excludes)
          */
-        bool calcBackfocusDelta(TileSelection tileSelection, double &backfocusDelta);
-
-        /**
-         * @brief calculate tilt based on user selection
-         * @return success = true
-         */
-        bool calcTilt();
-
-        /**
-         * @brief calculates average of 3 tile values
-         * @param tiles to average
-         * @param average tile average
-         * @return success = true
-         */
-        bool avTiles(int tiles[3], double &average);
+        AberrationInspectorAnalysis::Settings currentSettings() const;
 
         /**
          * @brief set exclude tiles vector
@@ -276,14 +244,6 @@ class AberrationInspector : public QDialog, public Ui::aberrationInspectorDialog
          * @param tileSelection
          */
         void setExcludeTile(int row, bool checked, TileSelection tileSelection);
-
-        /**
-         * @brief get tile from table row
-         * @param tileSelection
-         * @param row
-         * @return tile
-         */
-        int getTileFromRow(TileSelection tileSelection, int row);
 
         /**
          * @brief get the X,Y centre of the tile
@@ -347,7 +307,9 @@ class AberrationInspector : public QDialog, public Ui::aberrationInspectorDialog
         SensorGraphic *sensorGraphic { nullptr };
         int m_HighlightedRow { -1 };
 
-        // Curve fitting
+        // Curve fitting and analysis (per-tile fits, backfocus and tilt)
+        std::unique_ptr < AberrationInspectorAnalysis > m_analysis;
+        // Used for the sensor plane fit of the 3D graphic
         std::unique_ptr < CurveFitting > curveFitting;
         QVector < int > m_minimum;
         QVector < double > m_minMeasure;

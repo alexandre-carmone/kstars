@@ -208,53 +208,15 @@ void AberrationInspector::onCellChanged(int row, int column)
     QTableWidgetItem *item = abInsTable->item(row, column);
     int value = item->text().toInt();
 
-    int tile = getTileFromRow(static_cast<TileSelection>(abInsTileSelection->currentIndex()), row);
+    int tile = AberrationInspectorAnalysis::tileFromRow(static_cast<TileSelection>(abInsTileSelection->currentIndex()), row);
 
     if (tile >= 0 && tile < NUM_TILES)
     {
         m_minimum[tile] = value + m_minimum[TILE_CM];
+        m_analysis->setSolution(tile, m_minimum[tile]);
         // Rerun the calcs so the newly changed exclude flag is taken into account
         setTileSelection(static_cast<TileSelection>(abInsTileSelection->currentIndex()));
     }
-}
-
-int AberrationInspector::getTileFromRow(TileSelection tileSelection, int row)
-{
-    int tile = -1;
-
-    if (row < 0 || row >= NUM_TILES)
-    {
-        qCDebug(KSTARS_EKOS_FOCUS) << QString("%1 called with invalid row %2").arg(__FUNCTION__).arg(row);
-        return tile;
-    }
-
-    switch(tileSelection)
-    {
-        case TileSelection::TILES_ALL:
-            // Use all tiles
-            tile = row;
-            break;
-
-        case TileSelection::TILES_OUTER_CORNERS:
-            // Use tiles 0, 2, 4, 6, 8
-            tile = row * 2;
-            break;
-
-        case TileSelection::TILES_INNER_DIAMOND:
-            // Use tiles 1, 3, 4, 5, 7
-            if (row < 2)
-                tile = (row * 2) + 1;
-            else if (row == 2)
-                tile = 4;
-            else
-                tile = (row * 2) - 1;
-            break;
-
-        default:
-            qCDebug(KSTARS_EKOS_FOCUS) << QString("%1 called but TileSelection invalid").arg(__FUNCTION__);
-            break;
-    }
-    return tile;
 }
 
 void AberrationInspector::setExcludeTile(int row, bool checked, TileSelection tileSelection)
@@ -265,7 +227,7 @@ void AberrationInspector::setExcludeTile(int row, bool checked, TileSelection ti
         return;
     }
 
-    int tile = getTileFromRow(tileSelection, row);
+    int tile = AberrationInspectorAnalysis::tileFromRow(tileSelection, row);
     if (tile >= 0 && tile < NUM_TILES)
         m_excludeTile[tile] = checked;
 }
@@ -386,30 +348,18 @@ void AberrationInspector::setTileSelection(TileSelection tileSelection)
 
 void AberrationInspector::setupTiles(TileSelection tileSelection)
 {
-    switch(tileSelection)
-    {
-        case TileSelection::TILES_ALL:
-            // Use all tiles
-            for (int i = 0; i < NUM_TILES; i++)
-                m_useTile[i] = true;
-            break;
+    AberrationInspectorAnalysis::useTiles(tileSelection, m_useTile);
+}
 
-        case TileSelection::TILES_OUTER_CORNERS:
-            // Use tiles TL, TR, CM, BL, BR
-            m_useTile[TILE_TL] = m_useTile[TILE_TR] = m_useTile[TILE_CM] = m_useTile[TILE_BL] = m_useTile[TILE_BR] = true;
-            m_useTile[TILE_TM] = m_useTile[TILE_CL] = m_useTile[TILE_CR] = m_useTile[TILE_BM] = false;
-            break;
-
-        case TileSelection::TILES_INNER_DIAMOND:
-            // Use tiles TM, CL, CM, CR, BM
-            m_useTile[TILE_TL] = m_useTile[TILE_TR] = m_useTile[TILE_BL] = m_useTile[TILE_BR] = false;
-            m_useTile[TILE_TM] = m_useTile[TILE_CL] = m_useTile[TILE_CM] = m_useTile[TILE_CR] = m_useTile[TILE_BM] = true;
-            break;
-
-        default:
-            qCDebug(KSTARS_EKOS_FOCUS) << QString("%1 called with invalid tile selection %2").arg(__FUNCTION__).arg(tileSelection);
-            break;
-    }
+// The analysis settings currently selected in the dialog
+AberrationInspectorAnalysis::Settings AberrationInspector::currentSettings() const
+{
+    AberrationInspectorAnalysis::Settings settings;
+    settings.tileSelection = static_cast<TileSelection>(abInsTileSelection->currentIndex());
+    settings.optCentres = abInsOptCentres->isChecked();
+    for (int tile = 0; tile < NUM_TILES; tile++)
+        settings.exclude[tile] = m_excludeTile[tile];
+    return settings;
 }
 
 void AberrationInspector::setShowLabels(bool setting)
@@ -446,45 +396,28 @@ void AberrationInspector::tableResize()
     abInsTable->verticalHeader()->resizeSections(QHeaderView::ResizeToContents);
 }
 
-// Run curve fitting on the collected data for each tile, updating other widgets as we go
+// Run curve fitting on the collected data for each tile, updating other widgets as we go.
+// The fitting itself is done by AberrationInspectorAnalysis; this dialog only draws the results.
 void AberrationInspector::fitCurves()
 {
+    m_analysis.reset(new AberrationInspectorAnalysis(m_data, m_positions, m_measures, m_weights, m_numStars, m_tileOffsets));
+    // curveFitting is used for the sensor plane fit of the 3D graphic
     curveFitting.reset(new CurveFitting());
 
-    const double expected = 0.0;
-    int minPos, maxPos;
+    m_minimum.clear();
+    m_minMeasure.clear();
+    m_fit.clear();
+    m_R2.clear();
 
-    QVector<bool> outliers;
-    for (int i = 0; i < m_positions.count(); i++)
+    m_analysis->fit([this](int tile, CurveFitting * curve, const AberrationInspectorAnalysis::TileFit & fit)
     {
-        outliers.append(false);
-        if (i == 0)
-            minPos = maxPos = m_positions[i];
-        else
-        {
-            minPos = std::min(minPos, m_positions[i]);
-            maxPos = std::max(maxPos, m_positions[i]);
-        }
-    }
+        m_minimum.append(fit.solution);
+        m_minMeasure.append(fit.minMeasure);
+        m_fit.append(fit.fit);
+        m_R2.append(fit.R2);
 
-    for (int tile = 0; tile < m_measures.count(); tile++)
-    {
-        curveFitting->fitCurve(CurveFitting::FittingGoal::BEST, m_positions, m_measures[tile], m_weights[tile], outliers,
-                               m_data.curveFit, m_data.useWeights, m_data.optDir);
-
-        double position = 0.0;
-        double measure = 0.0;
-        double R2 = 0.0;
-        bool foundFit = curveFitting->findMinMax(expected, static_cast<double>(minPos), static_cast<double>(maxPos), &position,
-                        &measure, m_data.curveFit, m_data.optDir);
-        if (foundFit)
-            R2 = curveFitting->calculateR2(m_data.curveFit);
-
-        position = round(position);
-        m_minimum.append(position);
-        m_minMeasure.append(measure);
-        m_fit.append(foundFit);
-        m_R2.append(R2);
+        if (tile >= m_measures.count() || tile >= m_weights.count())
+            return;
 
         // Add the datapoints to the plot for the current tile
         // JEE Need to sort out what to do with outliers... for now ignore them
@@ -496,13 +429,13 @@ void AberrationInspector::fitCurves()
 
         m_plot->addData(m_positions, m_measures[tile], m_weights[tile], outliers);
         // Fit the curve - note this needs curveFitting with the parameters for the current solution
-        m_plot->drawCurve(tile, curveFitting.get(), position, measure, foundFit, R2);
+        m_plot->drawCurve(tile, curve, fit.solution, fit.minMeasure, fit.fit, fit.R2);
         // Draw solutions on the plot
-        m_plot->drawMaxMin(tile, position, measure);
+        m_plot->drawMaxMin(tile, fit.solution, fit.minMeasure);
         // Draw the CFZ for the central tile
         if (tile == TILE_CM)
-            m_plot->drawCFZ(position, measure, m_data.cfzSteps);
-    }
+            m_plot->drawCFZ(fit.solution, fit.minMeasure, m_data.cfzSteps);
+    });
 }
 
 // Update the results table
@@ -511,7 +444,7 @@ void AberrationInspector::updateTable()
     // Disconnect the cell changed callback to stop it firing whilst the table is updated
     disconnect(abInsTable, &AbInsTableWidget::cellChanged, this, &AberrationInspector::onCellChanged);
 
-    if (abInsTileSelection->currentIndex() == TILES_ALL)
+    if (abInsTileSelection->currentIndex() == TileSelection::TILES_ALL)
         abInsTable->setRowCount(NUM_TILES);
     else
         abInsTable->setRowCount(5);
@@ -588,10 +521,13 @@ void AberrationInspector::updateTable()
 // Analyse the results for backfocus delta and tilt based on tile selection.
 void AberrationInspector::analyseResults()
 {
+    const AberrationInspectorAnalysis::Result result = m_analysis->analyse(currentSettings());
+
     // Backfocus
-    // +result = move sensor nearer field flattener
-    // -result = move sensor further from field flattener
-    bool backfocusOK = calcBackfocusDelta(static_cast<TileSelection>(abInsTileSelection->currentIndex()), m_backfocus);
+    // -result = move sensor nearer field flattener
+    // +result = move sensor further from field flattener
+    bool backfocusOK = result.backfocusOK;
+    m_backfocus = result.backfocusMicrons;
 
     // Update backfocus screen widgets
     if (!backfocusOK)
@@ -599,15 +535,31 @@ void AberrationInspector::analyseResults()
     else
     {
         QString side = "";
-        if (m_backfocus < -0.9)
+        if (result.advice == AberrationInspectorAnalysis::ADVICE_NEARER)
             side = i18n("Move sensor nearer flattener");
-        else if (m_backfocus > 0.9)
+        else if (result.advice == AberrationInspectorAnalysis::ADVICE_AWAY)
             side = i18n("Move sensor away from flattener");
         backfocus->setText(QString("%1μm. %2").arg(m_backfocus, 0, 'f', 0).arg(side));
     }
 
-    // Tilt
-    bool tiltOK = calcTilt();
+    // Tilt. Like the original calculation, the deltas are refreshed whenever the central tile is usable and the
+    // tilt members only when the tilt could be calculated, so sim mode keeps seeing the last valid tilt otherwise.
+    bool tiltOK = result.tiltOK;
+    if (m_analysis->tileFit(TILE_CM).fit && !m_excludeTile[TILE_CM])
+    {
+        m_deltas.clear();
+        for (int tile = 0; tile < NUM_TILES; tile++)
+            m_deltas.append(result.deltasMicrons[tile]);
+    }
+    if (tiltOK)
+    {
+        m_LRMicrons = result.lrMicrons;
+        m_TBMicrons = result.tbMicrons;
+        m_diagonalMicrons = result.diagonalMicrons;
+        m_LRTilt = result.lrTiltPercent;
+        m_TBTilt = result.tbTiltPercent;
+        m_diagonalTilt = result.diagonalTiltPercent;
+    }
 
     // Update tilt screen widgets
     if (!tiltOK)
@@ -638,172 +590,6 @@ void AberrationInspector::analyseResults()
     {
         m_tiltCorrection->setInvalid();
     }
-}
-
-// Calculate the backfocus in microns
-// Note that the tile positions are at different distances from the sensor centre so we need to weight
-// values by the distance to tile centre. Also, we only include tiles for which curve fitting worked
-// and for which the user hasn't elected to exclude
-bool AberrationInspector::calcBackfocusDelta(TileSelection tileSelection, double &backfocusDelta)
-{
-    backfocusDelta = 0.0;
-
-    // Firstly check that we have a valid central tile - we can't do anything without that
-    if (!m_fit[TILE_CM] || m_excludeTile[TILE_CM])
-        return false;
-
-    double dist = 0.0, sum = 0.0, counter = 0.0;
-
-    switch(tileSelection)
-    {
-        case TileSelection::TILES_ALL:
-            // Use all usable tiles weighted by their distance from the centre
-            for (int i = 0; i < NUM_TILES; i++)
-            {
-                if (i == TILE_CM)
-                    continue;
-
-                if (m_fit[i] && !m_excludeTile[i])
-                {
-                    dist = getXYTileCentre(static_cast<tileID>(i)).length();
-                    sum += m_minimum[i] * dist;
-                    counter += dist;
-                }
-            }
-            if (counter == 0)
-                // No valid tiles so can't complete the calc
-                return false;
-            break;
-
-        case TileSelection::TILES_OUTER_CORNERS:
-            // All tiles are diagonal from centre... so no need to weight the calc
-            // Use tiles 0, 2, 6, 8
-            if (m_fit[0] && !m_excludeTile[0])
-            {
-                sum += m_minimum[0];
-                counter++;
-            }
-            if (m_fit[2] && !m_excludeTile[2])
-            {
-                sum += m_minimum[2];
-                counter++;
-            }
-            if (m_fit[6] && !m_excludeTile[6])
-            {
-                sum += m_minimum[6];
-                counter++;
-            }
-            if (m_fit[8] && !m_excludeTile[8])
-            {
-                sum += m_minimum[8];
-                counter++;
-            }
-
-            if (counter == 0)
-                // No valid tiles so can't complete the calc
-                return false;
-            break;
-
-        case TileSelection::TILES_INNER_DIAMOND:
-            // Tiles are different distances from centre... so need to weight the calc
-            // Use tiles 1, 3, 5, 7
-            if (m_fit[TILE_TM] && !m_excludeTile[TILE_TM])
-            {
-                dist = getXYTileCentre(TILE_TM).length();
-                sum += m_minimum[TILE_TM] * dist;
-                counter += dist;
-            }
-            if (m_fit[TILE_CL] && !m_excludeTile[TILE_CL])
-            {
-                dist = getXYTileCentre(TILE_CL).length();
-                sum += m_minimum[TILE_CL] * dist;
-                counter += dist;
-            }
-            if (m_fit[TILE_CR] && !m_excludeTile[TILE_CR])
-            {
-                dist = getXYTileCentre(TILE_CR).length();
-                sum += m_minimum[TILE_CR] * dist;
-                counter += dist;
-            }
-            if (m_fit[TILE_BM] && !m_excludeTile[TILE_BM])
-            {
-                dist = getXYTileCentre(TILE_BM).length();
-                sum += m_minimum[TILE_BM] * dist;
-                counter += dist;
-            }
-
-            if (counter == 0)
-                // No valid tiles so can't complete the calc
-                return false;
-            break;
-
-        default:
-            qCDebug(KSTARS_EKOS_FOCUS) << QString("%1 called with invalid tile selection %2").arg(__FUNCTION__).arg(tileSelection);
-            return false;
-            break;
-    }
-    backfocusDelta = (m_minimum[TILE_CM] - (sum / counter)) * m_data.focuserStepMicrons;
-    return true;
-}
-
-bool AberrationInspector::calcTilt()
-{
-    // Firstly check that we have a valid central tile - we can't do anything without that
-    if (!m_fit[TILE_CM] || m_excludeTile[TILE_CM])
-        return false;
-
-    // Calculate the deltas relative to the centre tile in microns
-    m_deltas.clear();
-    for (int tile = 0; tile < NUM_TILES; tile++)
-        m_deltas.append((m_minimum[TILE_CM] - m_minimum[tile]) * m_data.focuserStepMicrons);
-
-    // Calculate the average tile position for left, right, top and bottom. If any of these cannot be
-    // calculated then fail the whole calculation.
-    double avLeft, avRight, avTop, avBottom;
-    int tilesL[3] = { 0, 3, 6 };
-    if (!avTiles(tilesL, avLeft))
-        return false;
-    int tilesR[3] = { 2, 5, 8 };
-    if (!avTiles(tilesR, avRight))
-        return false;
-    int tilesT[3] = { 0, 1, 2 };
-    if (!avTiles(tilesT, avTop))
-        return false;
-    int tilesB[3] = { 6, 7, 8 };
-    if(!avTiles(tilesB, avBottom))
-        return false;
-
-    m_LRMicrons = avLeft - avRight;
-    m_TBMicrons = avTop - avBottom;
-    m_diagonalMicrons = std::hypot(m_LRMicrons, m_TBMicrons);
-
-    // Calculate the sensor spans in microns
-    const double LRSpan = (m_data.sensorWidth - m_data.tileWidth) * m_data.pixelSize;
-    const double TBSpan = (m_data.sensorHeight - m_data.tileWidth) * m_data.pixelSize;
-
-    // Calculate the tilt as a % slope
-    m_LRTilt = m_LRMicrons / LRSpan * 100.0;
-    m_TBTilt = m_TBMicrons / TBSpan * 100.0;
-    m_diagonalTilt = std::hypot(m_LRTilt, m_TBTilt);
-    return true;
-}
-
-// Averages upto 3 passed in tile values.
-bool AberrationInspector::avTiles(int tiles[3], double &average)
-{
-    double sum = 0.0;
-    int counter = 0;
-    for (int i = 0; i < 3; i++)
-    {
-        if (m_useTile[tiles[i]] && m_fit[tiles[i]] && !m_excludeTile[tiles[i]])
-        {
-            sum += m_deltas[tiles[i]];
-            counter++;
-        }
-    }
-    if (counter > 0)
-        average = sum / counter;
-    return (counter > 0);
 }
 
 // Initialise the 3D graphic
@@ -1177,65 +963,7 @@ bool AberrationInspector::processPetzval(TileSelection tileSelection)
 // Returns the X, Y centre of the tile in microns
 QVector2D AberrationInspector::getXYTileCentre(tileID tile)
 {
-    const double halfSW = m_data.sensorWidth * m_data.pixelSize / 2.0;
-    const double halfSH = m_data.sensorHeight * m_data.pixelSize / 2.0;
-    const double halfTS = m_data.tileWidth * m_data.pixelSize / 2.0;
-
-    // Focus calculates the average star position in each tile and passes this to Aberration Inspector as
-    // an x, y offset from the center of the tile. If stars are homogeneously distributed then the offset would
-    // be 0, 0. If they aren't, then offset represents how much to add to the tile centre.
-    // A user option (abInsOptCentres) specifies whether to use the offsets.
-    double xOffset = 0.0;
-    double yOffset = 0.0;
-    if (abInsOptCentres->isChecked())
-    {
-        xOffset = m_tileOffsets[tile].x() * m_data.pixelSize;
-        yOffset = m_tileOffsets[tile].y() * m_data.pixelSize;
-    }
-
-    switch (tile)
-    {
-        case TILE_TL:
-            return QVector2D(-(halfSW - halfTS) + xOffset, halfSH - halfTS + yOffset);
-            break;
-
-        case TILE_TM:
-            return QVector2D(xOffset, halfSH - halfTS + yOffset);
-            break;
-
-        case TILE_TR:
-            return QVector2D(halfSW - halfTS + xOffset, halfSH - halfTS + yOffset);
-            break;
-
-        case TILE_CL:
-            return QVector2D(-(halfSW - halfTS) + xOffset, yOffset);
-            break;
-
-        case TILE_CM:
-            return QVector2D(xOffset, yOffset);
-            break;
-
-        case TILE_CR:
-            return QVector2D(halfSW - halfTS + xOffset, yOffset);
-            break;
-
-        case TILE_BL:
-            return QVector2D(-(halfSW - halfTS) + xOffset, -(halfSH - halfTS) + yOffset);
-            break;
-
-        case TILE_BM:
-            return QVector2D(xOffset, -(halfSH - halfTS) + yOffset);
-            break;
-
-        case TILE_BR:
-            return QVector2D(halfSW - halfTS + xOffset, -(halfSH - halfTS) + yOffset);
-            break;
-
-        default:
-            qCDebug(KSTARS_EKOS_FOCUS) << QString("%1 called with invalid tile %2").arg(__FUNCTION__).arg(tile);
-            return QVector2D(0.0, 0.0);
-            break;
-    }
+    return m_analysis->tileCentreMicrons(tile, abInsOptCentres->isChecked());
 }
 
 // Position the labels just outside the sensor so they are always visible

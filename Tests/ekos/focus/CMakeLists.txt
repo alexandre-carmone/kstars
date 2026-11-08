@@ -15,3 +15,8 @@ ADD_EXECUTABLE( testfocusdevices testfocusdevices.cpp )
 TARGET_LINK_LIBRARIES( testfocusdevices ${TEST_LIBRARIES})
 ADD_TEST( NAME FocusDevicesTest COMMAND testfocusdevices )
 SET_TESTS_PROPERTIES( FocusDevicesTest PROPERTIES LABELS "stable")
+
+ADD_EXECUTABLE( testaberrationinspector testaberrationinspector.cpp )
+TARGET_LINK_LIBRARIES( testaberrationinspector ${TEST_LIBRARIES})
+ADD_TEST( NAME AberrationInspectorTest COMMAND testaberrationinspector )
+SET_TESTS_PROPERTIES( AberrationInspectorTest PROPERTIES LABELS "stable")
