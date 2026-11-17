@@ -155,7 +155,7 @@ tilt of the fixture above (−20 µm over a 14400 µm span) on a 64 mm radius pl
 ## Manual test: Aberration Inspector over EkosLive
 
 The EkosLive commands (`focus_abins_start`, `focus_abins_get_status`, `focus_abins_get_result`,
-`focus_abins_get_all_settings`, `focus_abins_set_all_settings`) and the pushed `focus_abins_status` /
+`focus_abins_get_all_settings`, `focus_abins_set_all_settings`, `focus_abins_reanalyse`) and the pushed `focus_abins_status` /
 `focus_abins_result` messages have no automated test: `EkosLive::Message` needs a websocket server. KStars is the
 websocket **client**, so run any EkosLive-compatible local server (for example the `junos-server` relay, or a
 small script answering `POST /api/authenticate` with `{"success": true, "token": "<jwt>"}` and accepting the
@@ -177,7 +177,8 @@ socket:
    `focus_abins_result` (nine tiles; `solution`, `deltaTicks` and `r2` match the dialog table, `backfocus` and
    `tilt` match the Analysis fields, `tiltPlate.points[].adjustmentMm` match the advisory, each tile's `curve`
    over `curveX` and `measures` over `positions` match the dialog's V-curves) followed by
-   `focus_abins_status` with `lastRunState: "complete"`, `hasResult: true`. The desktop dialog opens once.
+   `focus_abins_status` with `lastRunState: "complete"`, `hasResult: true`, `canReanalyse: false`, then
+   (the run ends) one with `running: false`, `canReanalyse: true`. The desktop dialog opens once.
 4. `focus_abins_start` twice quickly → the second reply has `startAccepted: false` and `reasons` containing
    `inspectorRunning` (and `autofocusRunning` once the autofocus has begun); afterwards a plain Autofocus does
    not open the inspector.
@@ -189,3 +190,12 @@ socket:
    "tiltPlateType": 1, "tiltRadius": 70}` → the reply echoes the effective settings; the next run's dialog
    and result use them. Invalid values (`"tiltRadius": 0`, `"abInsTileSelection": "x"`) are ignored.
 8. A build without Qt Graphs still sends `focus_abins_result`, with `dialogAvailable: false` in the status.
+9. After a run, `focus_abins_reanalyse {"exclude": [0], "tileSelection": "all", "optCentres": false}` →
+   a pushed `focus_abins_result` with the same `run` and `timestamp`, `reanalysed: true`, tile 0
+   `excluded: true`, and backfocus / tilt equal to the dialog's with the TL checkbox ticked and "All" tiles.
+   `focus_abins_get_all_settings` still reports the previous `abInsTileSelection` and `abInsOptCentres`
+   (Options are not written). A plain Autofocus afterwards leaves a further re-analysis unchanged.
+10. `focus_abins_reanalyse` during a run → `focus_abins_status` with `reanalyseAccepted: false`,
+    `error: "running"`; before any run → `error: "noResult"`; `{"exclude": [9]}`, `{"exclude": [1.5]}` or
+    `{"exclude": 0}` → `invalidExclude`; `{"tileSelection": "x"}` → `invalidTileSelection`;
+    `{"optCentres": 1}` → `invalidOptCentres`.

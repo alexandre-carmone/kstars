@@ -1220,6 +1220,8 @@ QJsonObject Focus::abInsStatus() const
     status.insert(QStringLiteral("lastRun"), m_abInsRun);
     status.insert(QStringLiteral("lastRunState"), m_abInsLastState);
     status.insert(QStringLiteral("hasResult"), !m_abInsLastResult.isEmpty());
+    // Only once the run is over: the "complete" push is sent while m_abInsOn is still set, the stop() one is not
+    status.insert(QStringLiteral("canReanalyse"), m_abInsAnalysis && !m_abInsOn);
 #ifdef HAVE_QTGRAPHS
     status.insert(QStringLiteral("dialogAvailable"), true);
 #else
@@ -3963,7 +3965,15 @@ void Focus::startAberrationInspector()
     data.opticalTrainID = currentOpticalTrainID();
 
     // Analyse the run headlessly for EkosLive clients. The dialog below computes the same numbers for its display.
-    m_abInsLastResult = buildAbInsResult(data);
+    // The fitted analysis is kept so that reanalyseAbIns() can redo it with other settings.
+    m_abInsAnalysis.reset(new AberrationInspectorAnalysis(data, m_abInsPosition, m_abInsMeasure, m_abInsWeight,
+                          m_abInsNumStars, m_abInsTileCenterOffset));
+    m_abInsAnalysis->fit();
+    m_abInsTrain = opticalTrain();
+    m_abInsTimestamp = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    m_abInsLastResult = buildAbInsResult(
+                            AberrationInspectorAnalysis::tileSelectionFromOption(Options::abInsTileSelection()),
+                            Options::abInsOptCentres(), QList<int>(), false);
     m_abInsResultPending = false;
     m_abInsLastState = QStringLiteral("complete");
     Q_EMIT newAbInsResult(m_abInsLastResult);
@@ -3982,22 +3992,22 @@ void Focus::startAberrationInspector()
 #endif
 }
 
-// Headless Aberration Inspector analysis of the data collected during the run, for EkosLive clients
-QJsonObject Focus::buildAbInsResult(const AbInsData &data)
+// Headless Aberration Inspector analysis of the kept run, for EkosLive clients
+QJsonObject Focus::buildAbInsResult(int tileSelection, bool optCentres, const QList<int> &excluded, bool reanalysed)
 {
-    AberrationInspectorAnalysis analysis(data, m_abInsPosition, m_abInsMeasure, m_abInsWeight, m_abInsNumStars,
-                                         m_abInsTileCenterOffset);
-    analysis.fit();
-
+    const AbInsData &data = m_abInsAnalysis->data();
     AberrationInspectorAnalysis::Settings settings;
-    settings.tileSelection = AberrationInspectorAnalysis::tileSelectionFromOption(Options::abInsTileSelection());
-    settings.optCentres = Options::abInsOptCentres();
-    const AberrationInspectorAnalysis::Result result = analysis.analyse(settings);
+    settings.tileSelection = static_cast<AberrationInspectorAnalysis::TileSelection>(tileSelection);
+    settings.optCentres = optCentres;
+    for (int tile : excluded)
+        settings.exclude[tile] = true;
+    const AberrationInspectorAnalysis::Result result = m_abInsAnalysis->analyse(settings);
 
-    QJsonObject json = analysis.toJson(result);
+    QJsonObject json = m_abInsAnalysis->toJson(result);
     json.insert(QStringLiteral("available"), true);
-    json.insert(QStringLiteral("train"), opticalTrain());
-    json.insert(QStringLiteral("timestamp"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+    json.insert(QStringLiteral("train"), m_abInsTrain);
+    json.insert(QStringLiteral("timestamp"), m_abInsTimestamp);
+    json.insert(QStringLiteral("reanalysed"), reanalysed);
 
     // Tilt plate advice, with the same plate settings and ETA detection as the Tilt Correction Advisory
     QSharedPointer<ISD::GenericDevice> eta;
@@ -4019,10 +4029,66 @@ QJsonObject Focus::buildAbInsResult(const AbInsData &data)
         json.insert(QStringLiteral("tiltPlate"), tiltPlate);
     }
 
-    qCInfo(KSTARS_EKOS_FOCUS) << "Aberration Inspector run" << data.run << "resultsOK" << result.resultsOK
+    qCInfo(KSTARS_EKOS_FOCUS) << "Aberration Inspector run" << data.run << (reanalysed ? "re-analysed" : "analysed")
+                              << "excluded" << excluded << "resultsOK" << result.resultsOK
                               << "backfocus(um)" << result.backfocusMicrons << "LR(um)" << result.lrMicrons
                               << "TB(um)" << result.tbMicrons << "warnings" << result.warnings;
     return json;
+}
+
+// Analyse the last run again with other settings, for EkosLive clients. Options are left untouched.
+bool Focus::reanalyseAbIns(const QVariantMap &settings, QString *reason)
+{
+    auto refuse = [reason](const QString & code)
+    {
+        if (reason)
+            *reason = code;
+        return false;
+    };
+    if (m_abInsOn)
+        return refuse(QStringLiteral("running"));
+    if (!m_abInsAnalysis)
+        return refuse(QStringLiteral("noResult"));
+
+    // JSON numbers arrive as doubles: accept whole numbers 0 to 8, ignoring duplicates
+    QList<int> excluded;
+    if (settings.contains(QStringLiteral("exclude")))
+    {
+        const QVariant value = settings.value(QStringLiteral("exclude"));
+        if (value.userType() != QMetaType::QVariantList)
+            return refuse(QStringLiteral("invalidExclude"));
+        for (const QVariant &entry : value.toList())
+        {
+            if (entry.userType() == QMetaType::Bool || entry.userType() == QMetaType::QString)
+                return refuse(QStringLiteral("invalidExclude"));
+            bool ok = false;
+            const double tile = entry.toDouble(&ok);
+            if (!ok || tile != std::floor(tile) || tile < 0 || tile >= NUM_TILES)
+                return refuse(QStringLiteral("invalidExclude"));
+            if (!excluded.contains(static_cast<int>(tile)))
+                excluded.append(static_cast<int>(tile));
+        }
+    }
+
+    AberrationInspectorAnalysis::TileSelection tileSelection =
+        AberrationInspectorAnalysis::tileSelectionFromOption(Options::abInsTileSelection());
+    if (settings.contains(QStringLiteral("tileSelection")) &&
+            !AberrationInspectorAnalysis::tileSelectionFromVariant(settings.value(QStringLiteral("tileSelection")),
+                    &tileSelection))
+        return refuse(QStringLiteral("invalidTileSelection"));
+
+    bool optCentres = Options::abInsOptCentres();
+    if (settings.contains(QStringLiteral("optCentres")))
+    {
+        const QVariant value = settings.value(QStringLiteral("optCentres"));
+        if (value.userType() != QMetaType::Bool)
+            return refuse(QStringLiteral("invalidOptCentres"));
+        optCentres = value.toBool();
+    }
+
+    m_abInsLastResult = buildAbInsResult(tileSelection, optCentres, excluded, true);
+    Q_EMIT newAbInsResult(m_abInsLastResult);
+    return true;
 }
 
 uint32_t Focus::currentOpticalTrainID() const

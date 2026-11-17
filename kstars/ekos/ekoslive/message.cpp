@@ -968,6 +968,18 @@ void Message::processAbInsCommands(const QSharedPointer<Ekos::Focus> &focus, con
         // Echo the effective settings so the client can refresh its view
         sendResponse(commands[FOCUS_ABINS_GET_ALL_SETTINGS], QJsonObject::fromVariantMap(focus->abInsSettings()));
     }
+    else if (command == commands[FOCUS_ABINS_REANALYSE])
+    {
+        // On success the pushed focus_abins_result is the reply
+        QString reason;
+        if (!focus->reanalyseAbIns(payload.toVariantMap(), &reason))
+        {
+            QJsonObject status = focus->abInsStatus();
+            status.insert(QStringLiteral("reanalyseAccepted"), false);
+            status.insert(QStringLiteral("error"), reason);
+            sendResponse(commands[FOCUS_ABINS_STATUS], status);
+        }
+    }
     else
         qCWarning(KSTARS_EKOS) << "Unknown Aberration Inspector command" << command;
 }

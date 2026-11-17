@@ -218,7 +218,11 @@ class Message : public QObject
          * focus_abins_start (reply focus_abins_status with startAccepted and, when rejected, error),
          * focus_abins_get_status (reply focus_abins_status), focus_abins_get_result (reply focus_abins_result,
          * {"available": false} when no run has completed), focus_abins_get_all_settings and
-         * focus_abins_set_all_settings (both reply focus_abins_get_all_settings with the effective settings).
+         * focus_abins_set_all_settings (both reply focus_abins_get_all_settings with the effective settings),
+         * focus_abins_reanalyse {exclude, tileSelection, optCentres} (see Focus::reanalyseAbIns(); the reply is
+         * the pushed focus_abins_result, same run and timestamp with reanalysed true; when refused, a
+         * focus_abins_status with reanalyseAccepted false and error, a code: running, noResult, invalidExclude,
+         * invalidTileSelection, invalidOptCentres).
          * focus_abins_status is also pushed when a run starts, has been analysed or ends, and in get_states;
          * focus_abins_result is pushed when a run has been analysed. Only the reply to focus_abins_start carries
          * startAccepted: an accepted start pushes a status (running true) before that reply arrives, so clients

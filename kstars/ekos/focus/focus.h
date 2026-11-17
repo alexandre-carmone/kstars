@@ -39,6 +39,7 @@ namespace Ekos
 {
 
 struct AbInsData;
+class AberrationInspectorAnalysis;
 class DarkProcessor;
 class FocusAlgorithmInterface;
 class FocusFWHM;
@@ -244,9 +245,22 @@ class Focus : public QWidget, public Ui::Focus
         /**
          * @brief abInsStatus State of the Aberration Inspector for EkosLive clients.
          * @return JSON object with canStart, reasons (see abInsBlockers()), running, lastRun,
-         * lastRunState (none | complete | aborted), hasResult and dialogAvailable.
+         * lastRunState (none | complete | aborted), hasResult, canReanalyse (see reanalyseAbIns()) and
+         * dialogAvailable.
          */
         QJsonObject abInsStatus() const;
+
+        /**
+         * @brief reanalyseAbIns Analyse the last Aberration Inspector run again with other settings, without a new
+         * autofocus run. The run's fit is kept, so only the table, backfocus, tilt and tilt plate advice change.
+         * On success the new result (same run and timestamp, reanalysed true) is emitted with newAbInsResult().
+         * @param settings exclude: list of tiles 0 to 8 to leave out; tileSelection: as abInsTileSelection (key or
+         * index); optCentres: bool. An absent key takes the Options value; Options are never written.
+         * @param reason when refused, receives a machine-readable code: running, noResult, invalidExclude,
+         * invalidTileSelection or invalidOptCentres.
+         * @return true when the result was re-analysed.
+         */
+        bool reanalyseAbIns(const QVariantMap &settings, QString *reason = nullptr);
 
         /**
          * @brief abInsLastResult Result of the last Aberration Inspector run as sent to EkosLive clients
@@ -1562,11 +1576,20 @@ class Focus : public QWidget, public Ui::Focus
         QString m_abInsLastState { QStringLiteral("none") };
         // Result of the last run for EkosLive clients
         QJsonObject m_abInsLastResult;
+        // Fitted analysis of the last analysed run, kept for reanalyseAbIns(). It holds copies of the run's data,
+        // so a later autofocus run clearing m_abInsPosition and the measures leaves it intact.
+        std::unique_ptr<AberrationInspectorAnalysis> m_abInsAnalysis;
+        // Optical train name and analysis time (UTC, ISO 8601) of that run, repeated by every re-analysis
+        QString m_abInsTrain;
+        QString m_abInsTimestamp;
         /**
-         * @brief buildAbInsResult Analyse the data collected during the run (positions, per-tile measures) with
-         * the headless AberrationInspectorAnalysis and the current options, and add the tilt plate advice.
+         * @brief buildAbInsResult Analyse the kept run (m_abInsAnalysis) with the given settings and add the tilt
+         * plate advice for the run's optical train.
+         * @param tileSelection an AberrationInspectorAnalysis::TileSelection
+         * @param excluded tiles (0 to 8) to leave out of the analysis
+         * @param reanalysed false for the analysis at the end of the run, true for reanalyseAbIns()
          */
-        QJsonObject buildAbInsResult(const AbInsData &data);
+        QJsonObject buildAbInsResult(int tileSelection, bool optCentres, const QList<int> &excluded, bool reanalysed);
         /**
          * @brief currentOpticalTrainID Id of the selected optical train, or 0 when the combo matches no train
          * (OpticalTrainManager::id() returns -1 then), which means "global settings" to TiltCorrectionCalc.

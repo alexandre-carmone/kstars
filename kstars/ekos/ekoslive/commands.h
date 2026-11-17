@@ -145,6 +145,7 @@ enum COMMANDS
     FOCUS_ABINS_RESULT,
     FOCUS_ABINS_GET_ALL_SETTINGS,
     FOCUS_ABINS_SET_ALL_SETTINGS,
+    FOCUS_ABINS_REANALYSE,
 
     // Guide
     GUIDE_START,
@@ -456,6 +457,7 @@ static QMap<COMMANDS, QString> const commands =
     {FOCUS_ABINS_RESULT, "focus_abins_result"},
     {FOCUS_ABINS_GET_ALL_SETTINGS, "focus_abins_get_all_settings"},
     {FOCUS_ABINS_SET_ALL_SETTINGS, "focus_abins_set_all_settings"},
+    {FOCUS_ABINS_REANALYSE, "focus_abins_reanalyse"},
 
     {SCHEDULER_GET_ALL_SETTINGS, "scheduler_get_all_settings"},
     {SCHEDULER_SET_ALL_SETTINGS, "scheduler_set_all_settings"},
