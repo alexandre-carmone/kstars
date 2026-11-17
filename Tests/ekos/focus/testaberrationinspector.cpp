@@ -75,6 +75,10 @@ class TestAberrationInspector : public QObject
         void optionAndKeyStrings();
         void tileSelectionFromVariant();
         void toJsonShape();
+        void toJsonCurves();
+        void toJsonCurvesUnfit();
+        void toJsonCentres();
+        void excludeListToJson();
 };
 
 #include "testaberrationinspector.moc"
@@ -745,6 +749,113 @@ void TestAberrationInspector::toJsonShape()
     COMPARE_DOUBLE(tilt.value(QStringLiteral("lrPercent")).toDouble(), -20.0 / 14400.0 * 100.0, 1e-9);
     COMPARE_DOUBLE(tilt.value(QStringLiteral("tbPercent")).toDouble(), 0.0, 1e-9);
     COMPARE_DOUBLE(tilt.value(QStringLiteral("diagonalPercent")).toDouble(), 20.0 / 14400.0 * 100.0, 1e-9);
+}
+
+void TestAberrationInspector::toJsonCurves()
+{
+    const Fixture f = makeFixture(SCENARIO_A);
+    auto analysis = makeAnalysis(f, 2.0);
+    analysis->fit();
+    const QJsonObject json = analysis->toJson(analysis->analyse(settingsFor(Selection::TILES_ALL)));
+
+    QVERIFY(keysAreCamelCase(json));
+    QCOMPARE(json.value(QStringLiteral("optDir")).toString(), QStringLiteral("minimise"));
+    const QJsonArray positions = json.value(QStringLiteral("positions")).toArray();
+    QCOMPARE(positions.count(), 11);
+    for (int i = 0; i < positions.count(); i++)
+        QCOMPARE(positions[i].toInt(), f.positions[i]);
+
+    // Positions 900..1100 widened by 10 % on each side, 6 steps apart
+    const QJsonArray curveX = json.value(QStringLiteral("curveX")).toArray();
+    QCOMPARE(curveX.count(), AberrationInspectorAnalysis::CURVE_POINTS);
+    COMPARE_DOUBLE(curveX.first().toDouble(), 880.0, 1e-9);
+    COMPARE_DOUBLE(curveX.last().toDouble(), 1120.0, 1e-9);
+    COMPARE_DOUBLE(curveX[20].toDouble(), 1000.0, 1e-9);
+
+    const QJsonArray tiles = json.value(QStringLiteral("tiles")).toArray();
+    for (int tile = 0; tile < NUM_TILES; tile++)
+    {
+        const QJsonObject item = tiles[tile].toObject();
+        const QJsonArray measures = item.value(QStringLiteral("measures")).toArray();
+        QCOMPARE(measures.count(), f.measures[tile].count());
+        for (int i = 0; i < measures.count(); i++)
+            QCOMPARE(measures[i].toDouble(), f.measures[tile][i]);
+        QCOMPARE(item.value(QStringLiteral("weights")).toArray().count(), f.weights[tile].count());
+        QCOMPARE(item.value(QStringLiteral("numStars")).toArray().count(), f.numStars[tile].count());
+        QCOMPARE(item.value(QStringLiteral("numStars")).toArray()[1].toInt(), f.numStars[tile][1]);
+
+        // The curve follows the hyperbola: its sample nearest the solution is about the measure at the solution
+        const QJsonArray curve = item.value(QStringLiteral("curve")).toArray();
+        QCOMPARE(curve.count(), AberrationInspectorAnalysis::CURVE_POINTS);
+        const int solution = analysis->tileFit(tile).solution;
+        int nearest = 0;
+        for (int i = 1; i < curveX.count(); i++)
+            if (std::abs(curveX[i].toDouble() - solution) < std::abs(curveX[nearest].toDouble() - solution))
+                nearest = i;
+        COMPARE_DOUBLE(curve[nearest].toDouble(), analysis->tileFit(tile).minMeasure, 0.01);
+        const double x0 = (curveX.first().toDouble() - SCENARIO_A[tile]) / 50.0;
+        COMPARE_DOUBLE(curve.first().toDouble(), std::sqrt(1.0 + x0 * x0) + 1.0, 0.01);
+    }
+}
+
+void TestAberrationInspector::toJsonCurvesUnfit()
+{
+    // Before fit() there is nothing to plot but the collected data
+    const Fixture f = makeFixture(SCENARIO_A);
+    auto analysis = makeAnalysis(f, 2.0);
+    QJsonObject json = analysis->toJson(analysis->analyse(settingsFor(Selection::TILES_ALL)));
+    QCOMPARE(json.value(QStringLiteral("curveX")).toArray().count(), 0);
+    QCOMPARE(json.value(QStringLiteral("positions")).toArray().count(), 11);
+    for (const auto &item : json.value(QStringLiteral("tiles")).toArray())
+    {
+        QCOMPARE(item.toObject().value(QStringLiteral("curve")).toArray().count(), 0);
+        QCOMPARE(item.toObject().value(QStringLiteral("measures")).toArray().count(), 11);
+    }
+
+    // Too few datapoints: no tile fits, so no curve, and the missing tiles give empty arrays
+    Fixture g = makeFixture(SCENARIO_A, 3);
+    g.measures.resize(5);
+    auto few = makeAnalysis(g, 2.0);
+    few->fit();
+    json = few->toJson(few->analyse(settingsFor(Selection::TILES_ALL)));
+    const QJsonArray tiles = json.value(QStringLiteral("tiles")).toArray();
+    for (int tile = 0; tile < NUM_TILES; tile++)
+    {
+        const QJsonObject item = tiles[tile].toObject();
+        QCOMPARE(item.value(QStringLiteral("curve")).toArray().count(), 0);
+        QCOMPARE(item.value(QStringLiteral("measures")).toArray().count(), tile < 5 ? 3 : 0);
+    }
+}
+
+void TestAberrationInspector::toJsonCentres()
+{
+    const Fixture f = makeFixture(SCENARIO_B);
+    auto analysis = makeAnalysis(f, 2.0);
+    inject(*analysis, SCENARIO_B);
+    const QJsonArray tiles = analysis->toJson(analysis->analyse(settingsFor(Selection::TILES_ALL)))
+                             .value(QStringLiteral("tiles")).toArray();
+    const double expected[NUM_TILES][2] = { { -7200, 5200 }, { 0, 5200 }, { 7200, 5200 }, { -7200, 0 }, { 0, 0 },
+        { 7200, 0 }, { -7200, -5200 }, { 0, -5200 }, { 7200, -5200 }
+    };
+    for (int tile = 0; tile < NUM_TILES; tile++)
+    {
+        const QJsonObject item = tiles[tile].toObject();
+        COMPARE_DOUBLE(item.value(QStringLiteral("centreXMicrons")).toDouble(), expected[tile][0], 1e-3);
+        COMPARE_DOUBLE(item.value(QStringLiteral("centreYMicrons")).toDouble(), expected[tile][1], 1e-3);
+    }
+}
+
+void TestAberrationInspector::excludeListToJson()
+{
+    const Fixture f = makeFixture(SCENARIO_C);
+    auto analysis = makeAnalysis(f, 2.0);
+    inject(*analysis, SCENARIO_C);
+    Settings settings = settingsFor(Selection::TILES_ALL);
+    settings.exclude[TILE_TL] = true;
+    settings.exclude[TILE_BR] = true;
+    const QJsonArray tiles = analysis->toJson(analysis->analyse(settings)).value(QStringLiteral("tiles")).toArray();
+    for (int tile = 0; tile < NUM_TILES; tile++)
+        QCOMPARE(tiles[tile].toObject().value(QStringLiteral("excluded")).toBool(), tile == TILE_TL || tile == TILE_BR);
 }
 
 void TestAberrationInspector::fitRoundsSolution()

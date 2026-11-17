@@ -32,8 +32,12 @@ void AberrationInspectorAnalysis::fit(const TileFitCallback &onTileFitted)
 {
     m_curveFitting.reset(new CurveFitting());
     m_fitWarnings.clear();
+    m_curveX.clear();
     for (int tile = 0; tile < NUM_TILES; tile++)
+    {
         m_tileFits[tile] = TileFit();
+        m_curveY[tile].clear();
+    }
 
     const double expected = 0.0;
     int minPos = 0, maxPos = 0;
@@ -49,6 +53,16 @@ void AberrationInspectorAnalysis::fit(const TileFitCallback &onTileFitted)
             minPos = std::min(minPos, m_positions[i]);
             maxPos = std::max(maxPos, m_positions[i]);
         }
+    }
+
+    // Positions at which the fitted curves are sampled: the desktop plot's x range (aberrationinspectorplot.cpp)
+    if (maxPos > minPos)
+    {
+        const double border = (maxPos - minPos) / 10.0;
+        const double lower = minPos - border;
+        const double interval = (maxPos - minPos + 2.0 * border) / (CURVE_POINTS - 1);
+        for (int i = 0; i < CURVE_POINTS; i++)
+            m_curveX.append(lower + i * interval);
     }
 
     // The non-linear solver needs at least as many datapoints as curve parameters.
@@ -89,6 +103,11 @@ void AberrationInspectorAnalysis::fit(const TileFitCallback &onTileFitted)
             m_tileFits[tile].solution = static_cast<int>(std::round(position));
             m_tileFits[tile].minMeasure = measure;
             m_tileFits[tile].R2 = R2;
+
+            // Sample the curve while the solver still holds this tile's coefficients
+            if (foundFit)
+                for (double x : std::as_const(m_curveX))
+                    m_curveY[tile].append(m_curveFitting->f(x));
         }
 
         if (onTileFitted)
@@ -559,6 +578,18 @@ QString AberrationInspectorAnalysis::curveFitKey(CurveFitting::CurveFit curveFit
     return QStringLiteral("unknown");
 }
 
+namespace
+{
+// Rounds to the given number of significant digits, to keep the sampled curves short on the wire
+double roundSignificant(double value, int digits)
+{
+    if (value == 0.0 || !std::isfinite(value))
+        return value;
+    const double scale = std::pow(10.0, digits - 1 - std::floor(std::log10(std::abs(value))));
+    return std::round(value * scale) / scale;
+}
+}
+
 QJsonObject AberrationInspectorAnalysis::toJson(const Result &result) const
 {
     QJsonObject json;
@@ -583,6 +614,17 @@ QJsonObject AberrationInspectorAnalysis::toJson(const Result &result) const
     json.insert(QStringLiteral("tileSelection"), tileSelectionToKey(result.tileSelection));
     json.insert(QStringLiteral("optCentres"), result.optCentres);
     json.insert(QStringLiteral("warnings"), QJsonArray::fromStringList(result.warnings));
+    json.insert(QStringLiteral("optDir"), m_data.optDir == CurveFitting::OPTIMISATION_MAXIMISE ?
+                QStringLiteral("maximise") : QStringLiteral("minimise"));
+
+    QJsonArray positions;
+    for (int position : m_positions)
+        positions.append(position);
+    json.insert(QStringLiteral("positions"), positions);
+    QJsonArray curveX;
+    for (double x : m_curveX)
+        curveX.append(x);
+    json.insert(QStringLiteral("curveX"), curveX);
 
     QJsonArray tiles;
     for (int tile = 0; tile < NUM_TILES; tile++)
@@ -601,6 +643,27 @@ QJsonObject AberrationInspectorAnalysis::toJson(const Result &result) const
         item.insert(QStringLiteral("maxStars"), row.maxStars);
         item.insert(QStringLiteral("r2"), row.R2);
         item.insert(QStringLiteral("minMeasure"), row.minMeasure);
+
+        QJsonArray measures, weights, numStars, curve;
+        if (tile < m_measures.count())
+            for (double measure : m_measures[tile])
+                measures.append(measure);
+        if (tile < m_weights.count())
+            for (double weight : m_weights[tile])
+                weights.append(weight);
+        if (tile < m_numStars.count())
+            for (int stars : m_numStars[tile])
+                numStars.append(stars);
+        for (double y : m_curveY[tile])
+            curve.append(roundSignificant(y, 4));
+        item.insert(QStringLiteral("measures"), measures);
+        item.insert(QStringLiteral("weights"), weights);
+        item.insert(QStringLiteral("numStars"), numStars);
+        item.insert(QStringLiteral("curve"), curve);
+
+        const QVector2D centre = tileCentreMicrons(static_cast<tileID>(tile), result.optCentres);
+        item.insert(QStringLiteral("centreXMicrons"), centre.x());
+        item.insert(QStringLiteral("centreYMicrons"), centre.y());
         tiles.append(item);
     }
     json.insert(QStringLiteral("tiles"), tiles);

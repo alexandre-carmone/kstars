@@ -148,6 +148,12 @@ class AberrationInspectorAnalysis
         static constexpr int MIN_DATAPOINTS = 4;
 
         /**
+         * Number of points at which fit() samples each fitted curve for toJson(), spread evenly over the desktop
+         * plot's x range: the datapoint positions widened by 10 % of their span on each side.
+         */
+        static constexpr int CURVE_POINTS = 41;
+
+        /**
          * @param data run parameters
          * @param positions focuser positions of the datapoints
          * @param measures per tile, the measure at each datapoint
@@ -222,7 +228,19 @@ class AberrationInspectorAnalysis
         /** @brief Machine-readable curve fit name: quadratic | hyperbola | parabola | gaussian2D | gaussian3D | plane. */
         static QString curveFitKey(CurveFitting::CurveFit curveFit);
 
-        /** @brief JSON representation of a result (camelCase keys, machine-readable codes, no translated text). */
+        /**
+         * @brief JSON representation of a result (camelCase keys, machine-readable codes, no translated text).
+         *
+         * Besides the result, it carries what a client needs to plot the run: the datapoint positions, each tile's
+         * measures, weights and star counts as collected (their lengths may differ, see datapointMismatch), the
+         * fitted curve sampled at curveX (empty for an unfit tile or before fit(); raw measures, 4 significant
+         * digits) and the tile centre in microns from tileCentreMicrons() with the result's optCentres. Measures
+         * and curves are in raw units: multiply by starUnits for the displayed value.
+         *
+         * Note: with optCentres the y of a tile centre inherits a sign quirk. Focus measures the star offset in
+         * image coordinates (y down, focus.cpp) while tileCentreMicrons() adds it to a y-up centre, so the y offset
+         * is applied mirrored. It is kept so that the result matches the desktop dialog.
+         */
         QJsonObject toJson(const Result &result) const;
 
     private:
@@ -240,6 +258,9 @@ class AberrationInspectorAnalysis
         std::unique_ptr<CurveFitting> m_curveFitting;
         TileFit m_tileFits[NUM_TILES];
         QStringList m_fitWarnings;
+        // Fitted curves sampled by fit(): the positions, then each tile's raw measures (empty when not fit)
+        QVector<double> m_curveX;
+        QVector<double> m_curveY[NUM_TILES];
 };
 
 }

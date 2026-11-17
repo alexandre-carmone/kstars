@@ -127,6 +127,12 @@ Three scenarios inject known per-tile solutions (focuser steps) instead of runni
   and are ignored (with `tileOffsetsUnavailable`) when the run provided no offsets.
 - `setSolutionSeam`, `optionAndKeyStrings`, `toJsonShape` — the debug/edit seam, the mapping between
   `Options::abInsTileSelection` text, wire keys and enum values, and the camelCase JSON payload.
+- `toJsonCurves`, `toJsonCurvesUnfit` — what a client needs to plot the run: `positions`, each tile's
+  `measures` / `weights` / `numStars` as collected, and the fitted curve sampled at the 41 `curveX` points
+  (880 to 1120 for positions 900..1100: the desktop plot's range, 10 % wider on each side) after a real
+  `fit()`; no `curveX` before `fit()` and no `curve` for an unfit tile.
+- `toJsonCentres`, `excludeListToJson` — each tile's centre in µm (TL at (−7200, +5200), y up) and its
+  `excluded` flag.
 
 ### `testtiltcorrection.cpp` — Tilt plate correction maths
 
@@ -169,7 +175,8 @@ socket:
 2. `focus_abins_get_result` → `focus_abins_result {"available": false}`.
 3. `focus_abins_start` → `focus_abins_status` with `startAccepted: true`, `running: true`; when the run ends,
    `focus_abins_result` (nine tiles; `solution`, `deltaTicks` and `r2` match the dialog table, `backfocus` and
-   `tilt` match the Analysis fields, `tiltPlate.points[].adjustmentMm` match the advisory) followed by
+   `tilt` match the Analysis fields, `tiltPlate.points[].adjustmentMm` match the advisory, each tile's `curve`
+   over `curveX` and `measures` over `positions` match the dialog's V-curves) followed by
    `focus_abins_status` with `lastRunState: "complete"`, `hasResult: true`. The desktop dialog opens once.
 4. `focus_abins_start` twice quickly → the second reply has `startAccepted: false` and `reasons` containing
    `inspectorRunning` (and `autofocusRunning` once the autofocus has begun); afterwards a plain Autofocus does
