@@ -529,6 +529,13 @@ bool AberrationInspectorAnalysis::tileSelectionFromVariant(const QVariant &value
     if (value.userType() == QMetaType::Bool)
         return false;
     bool ok = false;
+    // Qt 6 rounds a double in toInt(): accept only a whole one, as for an excluded tile
+    if (value.userType() == QMetaType::Double || value.userType() == QMetaType::Float)
+    {
+        const double d = value.toDouble(&ok);
+        if (!ok || d != std::floor(d))
+            return false;
+    }
     const int index = value.toInt(&ok);
     if (ok)
     {

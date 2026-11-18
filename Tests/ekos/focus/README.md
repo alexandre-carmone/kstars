@@ -197,5 +197,5 @@ socket:
    (Options are not written). A plain Autofocus afterwards leaves a further re-analysis unchanged.
 10. `focus_abins_reanalyse` during a run → `focus_abins_status` with `reanalyseAccepted: false`,
     `error: "running"`; before any run → `error: "noResult"`; `{"exclude": [9]}`, `{"exclude": [1.5]}` or
-    `{"exclude": 0}` → `invalidExclude`; `{"tileSelection": "x"}` → `invalidTileSelection`;
+    `{"exclude": 0}` → `invalidExclude`; `{"tileSelection": "x"}` or `1.5` → `invalidTileSelection`;
     `{"optCentres": 1}` → `invalidOptCentres`.

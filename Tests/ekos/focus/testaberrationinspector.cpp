@@ -654,6 +654,8 @@ void TestAberrationInspector::tileSelectionFromVariant()
     QVERIFY(!AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(-1), &selection));
     QVERIFY(!AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(QStringLiteral("bogus")), &selection));
     QVERIFY(!AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(true), &selection));
+    QVERIFY(!AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(1.5), &selection));
+    QVERIFY(!AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(2.4), &selection));
     QVERIFY(!AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(), &selection));
     QCOMPARE(selection, Selection::TILES_INNER_DIAMOND);
     QVERIFY(AberrationInspectorAnalysis::tileSelectionFromVariant(QVariant(QStringLiteral("all")), nullptr));
